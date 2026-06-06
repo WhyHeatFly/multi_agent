@@ -372,6 +372,21 @@ tr:last-child td {
   border-radius: 999px;
   padding: 4px 8px;
   font-size: 12px;
+  min-height: 28px;
+  font-weight: 700;
+}
+
+.option-pill:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: #fff;
+  color: var(--accent-strong);
+}
+
+.option-pill.selected,
+.option-pill.selected:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--success-bg);
+  color: var(--accent-strong);
 }
 
 .report-preview {

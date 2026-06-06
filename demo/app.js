@@ -36,6 +36,21 @@ elements.handoffButton.addEventListener("click", async () => {
   await generateHandoff();
 });
 
+elements.questionsPanel.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-option-field]");
+  if (!button) return;
+  const field = button.dataset.optionField;
+  const value = button.dataset.optionValue || "";
+  const input = document.querySelector(`[data-answer-field="${cssEscape(field)}"]`);
+  if (!input) return;
+
+  input.value = value;
+  input.focus();
+  document
+    .querySelectorAll(`[data-option-field="${cssEscape(field)}"]`)
+    .forEach((item) => item.classList.toggle("selected", item === button));
+});
+
 async function analyzeDemand() {
   const userInput = elements.userInput.value.trim();
   if (!userInput) {
@@ -218,7 +233,16 @@ function renderQuestions() {
         <div class="question-item">
           <p>${escapeHtml(question.question)}</p>
           <div class="option-row">${(question.options || [])
-            .map((option) => `<span class="option-pill">${escapeHtml(option)}</span>`)
+            .map(
+              (option) => `
+                <button
+                  class="option-pill"
+                  type="button"
+                  data-option-field="${escapeHtml(question.field)}"
+                  data-option-value="${escapeHtml(option)}"
+                >${escapeHtml(option)}</button>
+              `,
+            )
             .join("")}</div>
           <input data-answer-field="${escapeHtml(question.field)}" placeholder="填写答案，或输入一个选项" />
         </div>
