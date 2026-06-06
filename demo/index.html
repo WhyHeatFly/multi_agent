@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>需求 Agent 功能展示</title>
+    <link rel="stylesheet" href="/demo/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="workspace">
+        <aside class="input-panel" aria-label="需求输入">
+          <div class="title-group">
+            <p class="eyebrow">Demand Analyst Agent</p>
+            <h1>需求 Agent 功能展示</h1>
+            <p class="subtitle">输入自然语言需求，查看字段抽取、追问、报告和下游任务包。</p>
+          </div>
+
+          <form id="demandForm" class="form-stack">
+            <label>
+              <span>原始需求</span>
+              <textarea id="userInput" rows="6">为 3 月西湖春游的新婚人群设计一套丝绸伴手礼。</textarea>
+            </label>
+            <label>
+              <span>品牌上下文</span>
+              <input id="brandInput" value="南浔丝绸文化产业园" />
+            </label>
+            <label>
+              <span>目标渠道（用顿号、逗号或空格分隔）</span>
+              <input id="channelsInput" value="小红书、线下文旅店" />
+            </label>
+            <button id="analyzeButton" type="submit">分析需求</button>
+          </form>
+
+          <section class="section-block" aria-label="追问回答">
+            <div class="section-heading">
+              <h2>追问回答</h2>
+              <span id="questionCount" class="counter">0</span>
+            </div>
+            <div id="questionsPanel" class="question-list empty">分析后会在这里显示待确认问题。</div>
+            <button id="submitAnswersButton" type="button" disabled>提交回答并刷新报告</button>
+          </section>
+
+          <section class="section-block" aria-label="下游交接">
+            <div class="section-heading">
+              <h2>下游任务包</h2>
+            </div>
+            <button id="handoffButton" type="button" disabled>生成三类 Agent 任务包</button>
+          </section>
+        </aside>
+
+        <section class="result-panel" aria-label="分析结果">
+          <div id="notice" class="notice hidden"></div>
+
+          <section class="summary-band">
+            <div>
+              <p class="eyebrow">Current Task</p>
+              <h2 id="projectTitle">等待分析</h2>
+            </div>
+            <div class="score-box">
+              <span id="scoreValue">--</span>
+              <small>完整度</small>
+            </div>
+          </section>
+
+          <section class="section-block">
+            <div class="section-heading">
+              <h2>运行状态</h2>
+            </div>
+            <div id="metaGrid" class="meta-grid">
+              <div><span>任务 ID</span><strong>--</strong></div>
+              <div><span>报告 ID</span><strong>--</strong></div>
+              <div><span>任务状态</span><strong>--</strong></div>
+              <div><span>分析模式</span><strong>--</strong></div>
+              <div><span>LLM 状态</span><strong>--</strong></div>
+              <div><span>LLM 模型</span><strong>--</strong></div>
+            </div>
+          </section>
+
+          <section class="section-block">
+            <div class="section-heading">
+              <h2>字段抽取结果</h2>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>字段</th>
+                    <th>值</th>
+                    <th>来源</th>
+                    <th>置信度</th>
+                  </tr>
+                </thead>
+                <tbody id="fieldsTable">
+                  <tr><td colspan="4" class="empty-cell">暂无字段。</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="section-block">
+            <div class="section-heading">
+              <h2>报告预览</h2>
+            </div>
+            <article id="reportPreview" class="report-preview empty">暂无报告。</article>
+          </section>
+
+          <section class="section-block">
+            <div class="section-heading">
+              <h2>Handoff 输出</h2>
+            </div>
+            <div id="handoffPanel" class="handoff-grid empty">生成后会展示文化 IP、设计、营销三个下游任务包。</div>
+          </section>
+        </section>
+      </section>
+    </main>
+
+    <script src="/demo/app.js"></script>
+  </body>
+</html>

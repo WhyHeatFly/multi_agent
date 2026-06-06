@@ -5,14 +5,24 @@
 ## 运行测试
 
 ```bash
-python3 -m unittest
+python -m unittest
 ```
 
 ## 启动 API
 
 ```bash
-python3 -m demand_agent.api --host 127.0.0.1 --port 8000 --storage-dir outputs
+python -m demand_agent.api --host 127.0.0.1 --port 8000 --storage-dir outputs
 ```
+
+## 打开功能展示页
+
+启动 API 后访问：
+
+```text
+http://127.0.0.1:8000/demo
+```
+
+展示页会调用本地 API，演示需求输入、字段抽取、完整度评分、追问、报告预览和下游 Agent 任务包生成。
 
 ## 启用 LLM 语义分析
 

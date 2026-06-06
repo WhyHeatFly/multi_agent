@@ -1,9 +1,11 @@
 import json
+from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
 from demand_agent import DemandAnalysisService
+from demand_agent.api import DemandAgentHandler
 from demand_agent.llm_analyzer import LLMAnalyzer
 from demand_agent.llm_client import DeepSeekClient, LLMClientResult
 from demand_agent.models import FieldSource, TaskStatus
@@ -20,11 +22,30 @@ class FakeLLMClient:
         return self.result
 
 
+class FakeHandler(DemandAgentHandler):
+    def __init__(self):
+        self.wfile = BytesIO()
+        self.status = None
+        self.response_headers = {}
+
+    def send_response(self, code, message=None):
+        self.status = code
+
+    def send_header(self, keyword, value):
+        self.response_headers[keyword] = value
+
+    def end_headers(self):
+        return
+
+
 class DemandAnalysisServiceTest(unittest.TestCase):
     def setUp(self):
         self.tmp = TemporaryDirectory()
         self.storage_dir = Path(self.tmp.name)
-        self.service = DemandAnalysisService(storage_dir=self.storage_dir)
+        self.service = DemandAnalysisService(
+            storage_dir=self.storage_dir,
+            analyzer=LLMAnalyzer(FakeLLMClient(LLMClientResult(status="disabled", model="test"))),
+        )
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -311,6 +332,32 @@ class DemandAnalysisServiceTest(unittest.TestCase):
         self.assertEqual(client.base_url, "https://example.test")
         self.assertEqual(client.model, "deepseek-test")
         self.assertEqual(client.timeout_seconds, 7)
+
+class DemandAgentApiTest(unittest.TestCase):
+    def test_demo_index_is_served(self):
+        handler = FakeHandler()
+        handler._static("/demo")
+        body = handler.wfile.getvalue().decode("utf-8")
+
+        self.assertEqual(handler.status, 200)
+        self.assertIn("需求 Agent 功能展示", body)
+        self.assertEqual(handler.response_headers["Access-Control-Allow-Origin"], "*")
+
+    def test_demo_asset_is_served(self):
+        handler = FakeHandler()
+        handler._static("/demo/app.js")
+        body = handler.wfile.getvalue().decode("utf-8")
+
+        self.assertEqual(handler.status, 200)
+        self.assertIn("analyzeDemand", body)
+        self.assertIn("application/javascript", handler.response_headers["Content-Type"])
+
+    def test_json_response_includes_cors_header(self):
+        handler = FakeHandler()
+        handler._json({"error": "user_input is required"}, status=400)
+
+        self.assertEqual(handler.status, 400)
+        self.assertEqual(handler.response_headers["Access-Control-Allow-Origin"], "*")
 
 
 if __name__ == "__main__":
