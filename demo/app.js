@@ -176,7 +176,9 @@ function renderReport(data) {
   elements.reportPreview.innerHTML = markdownToHtml(data.report_markdown || "暂无报告。");
 
   const llmStatus = report.llm_status;
-  if (report.analysis_mode === "rules_fallback" && llmStatus && llmStatus !== "disabled") {
+  if (report.llm_repair_status === "success") {
+    showNotice("LLM 输出已自动修复后用于报告生成。", "success");
+  } else if (report.analysis_mode === "rules_fallback" && llmStatus && llmStatus !== "disabled") {
     showNotice(`LLM 未成功，本次已回退到规则分析。错误：${report.llm_error || llmStatus}`, "warning");
   } else if (report.analysis_mode === "llm_enhanced") {
     showNotice("LLM 语义增强分析已完成。", "success");
@@ -193,6 +195,8 @@ function renderMeta(data, report) {
     ["分析模式", badge(report.analysis_mode || "--", report.analysis_mode), true],
     ["LLM 状态", badge(report.llm_status || "--", report.llm_status), true],
     ["LLM 模型", report.llm_model || "--", false],
+    ["修复状态", badge(report.llm_repair_status || "not_needed", report.llm_repair_status), true],
+    ["修复次数", String(report.llm_repair_attempts ?? 0), false],
   ];
   elements.metaGrid.innerHTML = rows
     .map(

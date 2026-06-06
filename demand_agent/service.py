@@ -97,6 +97,9 @@ class DemandAnalysisService:
         task.llm_status = result.status
         task.llm_model = result.model
         task.llm_error = result.error
+        task.llm_repair_status = result.llm_repair_status
+        task.llm_repair_attempts = result.llm_repair_attempts
+        task.llm_validation_issues = result.llm_validation_issues
 
         changed = self._changed_fields(before_fields, task)
         turn = {
@@ -107,6 +110,8 @@ class DemandAnalysisService:
             "changed_fields": changed,
             "analysis_mode": task.analysis_mode,
             "llm_status": task.llm_status,
+            "llm_repair_status": task.llm_repair_status,
+            "llm_repair_attempts": task.llm_repair_attempts,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         task.conversation_turns.append(turn)
@@ -121,6 +126,9 @@ class DemandAnalysisService:
             "questions": [question.to_dict() for question in task.questions],
             "next_action": self._next_action(task),
             "completeness_score": completeness_score(task.fields),
+            "llm_repair_status": task.llm_repair_status,
+            "llm_repair_attempts": task.llm_repair_attempts,
+            "llm_validation_issues": task.llm_validation_issues,
             "report_id": task.report.report_id if task.report else None,
             "report_files": self.storage.report_files(task.report.report_id) if task.report else None,
         }
@@ -164,6 +172,9 @@ class DemandAnalysisService:
         task.llm_status = result.status
         task.llm_model = result.model
         task.llm_error = result.error
+        task.llm_repair_status = result.llm_repair_status
+        task.llm_repair_attempts = result.llm_repair_attempts
+        task.llm_validation_issues = result.llm_validation_issues
         task.report_insights = result.report_insights
         task.extra_fields = result.extra_fields
         task.record(
@@ -173,6 +184,9 @@ class DemandAnalysisService:
                 "llm_status": task.llm_status,
                 "llm_model": task.llm_model,
                 "llm_error": task.llm_error,
+                "llm_repair_status": task.llm_repair_status,
+                "llm_repair_attempts": task.llm_repair_attempts,
+                "llm_validation_issues": task.llm_validation_issues,
                 "intent": task.intent,
                 "fields": self._fields_json(task),
                 "extra_fields": task.extra_fields,
@@ -247,6 +261,9 @@ class DemandAnalysisService:
             "llm_status": task.llm_status,
             "llm_model": task.llm_model,
             "llm_error": task.llm_error,
+            "llm_repair_status": task.llm_repair_status,
+            "llm_repair_attempts": task.llm_repair_attempts,
+            "llm_validation_issues": task.llm_validation_issues,
             "project_summary": self._project_summary(fields),
             "original_requirement": task.user_input,
             "intent": task.intent,

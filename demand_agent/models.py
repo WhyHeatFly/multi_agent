@@ -77,6 +77,9 @@ class DemandTask:
     llm_status: str = "disabled"
     llm_model: str | None = None
     llm_error: str | None = None
+    llm_repair_status: str = "not_needed"
+    llm_repair_attempts: int = 0
+    llm_validation_issues: list[dict[str, Any]] = field(default_factory=list)
     report_insights: dict[str, Any] = field(default_factory=dict)
     extra_fields: dict[str, Any] = field(default_factory=dict)
     conversation_turns: list[dict[str, Any]] = field(default_factory=list)

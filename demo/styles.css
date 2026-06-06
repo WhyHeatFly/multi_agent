@@ -366,6 +366,8 @@ tr:last-child td {
 }
 
 .badge.success,
+.badge.success_repaired,
+.badge.not_needed,
 .badge.explicit,
 .badge.context,
 .badge.user_confirmed {
@@ -378,7 +380,8 @@ tr:last-child td {
 .badge.inferred,
 .badge.disabled,
 .badge.failed,
-.badge.invalid_json {
+.badge.invalid_json,
+.badge.repair_failed {
   background: var(--warning-bg);
   color: var(--warning);
 }

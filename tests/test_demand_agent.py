@@ -35,6 +35,40 @@ class SequenceFakeLLMClient:
         return LLMClientResult(status="disabled", model="test")
 
 
+def minimal_report_insights():
+    return {
+        "personas": [
+            {
+                "name": "新婚人群",
+                "motivation": "纪念旅行与婚礼节点",
+                "design_implication": "强调浪漫、轻便和纪念价值",
+            }
+        ],
+        "scenario_map": [
+            {
+                "scenario": "春游礼赠",
+                "user_goal": "在旅行中完成体面赠礼和拍照传播",
+                "product_requirements": ["轻便", "有祝福寓意"],
+            }
+        ],
+        "product_recommendations": {
+            "recommended": [
+                {
+                    "category": "真丝小方巾",
+                    "role": "主产品",
+                    "reason": "适合承载西湖纹样并兼具使用价值",
+                }
+            ]
+        },
+        "constraints": {"channels": ["小红书"]},
+        "risk_notes": ["避免悲情爱情典故"],
+        "trend_summary": {
+            "data_sources": ["LLM语义推断"],
+            "suggestion": "未接入实时趋势数据",
+        },
+    }
+
+
 class FakeHandler(DemandAgentHandler):
     def __init__(self, path="/", payload=None):
         self.wfile = BytesIO()
@@ -214,20 +248,7 @@ class DemandAnalysisServiceTest(unittest.TestCase):
                             "priority": 1,
                         }
                     ],
-                    "report_insights": {
-                        "personas": [
-                            {
-                                "name": "重视仪式感的新婚人群",
-                                "motivation": "纪念婚礼与旅行",
-                                "design_implication": "强调浪漫与长期保存价值",
-                            }
-                        ],
-                        "risk_notes": ["避免悲情爱情典故"],
-                        "trend_summary": {
-                            "data_sources": ["LLM语义推断"],
-                            "suggestion": "未接入实时趋势数据",
-                        },
-                    },
+                    "report_insights": minimal_report_insights(),
                 },
             )
         )
@@ -299,6 +320,7 @@ class DemandAnalysisServiceTest(unittest.TestCase):
                         {"field": "product_categories", "question": "品类？", "options": ["丝巾"], "priority": 4},
                         {"field": "unknown_field", "question": "未知？", "options": ["A"], "priority": 0},
                     ],
+                    "report_insights": minimal_report_insights(),
                 },
             )
         )
@@ -331,6 +353,7 @@ class DemandAnalysisServiceTest(unittest.TestCase):
                     "report_insights": {
                         "personas": ["新婚人群", "婚礼宾客"],
                         "scenario_map": ["婚礼回礼", "春游纪念"],
+                        "product_recommendations": minimal_report_insights()["product_recommendations"],
                     },
                 },
             )
@@ -347,6 +370,124 @@ class DemandAnalysisServiceTest(unittest.TestCase):
         self.assertIn("婚礼回礼", report["report_markdown"])
         self.assertIsInstance(report["report_json"]["personas"][0], dict)
         self.assertIsInstance(report["report_json"]["scenario_map"][0], dict)
+
+    def test_invalid_json_is_repaired_before_rules_fallback(self):
+        fake_client = SequenceFakeLLMClient(
+            [
+                LLMClientResult(
+                    status="invalid_json",
+                    model="deepseek-test",
+                    error="invalid json",
+                    raw_text='{"intent": {"primary": "新品设计"',
+                ),
+                LLMClientResult(
+                    status="success",
+                    model="deepseek-test",
+                    content={
+                        "intent": {"primary": "新品设计", "secondary": ["礼品定制"], "confidence": 0.92},
+                        "fields": {
+                            "target_users": {"value": ["新婚人群"], "source": "explicit", "confidence": 0.9},
+                            "product_categories": {"value": ["真丝小方巾"], "source": "explicit", "confidence": 0.9},
+                        },
+                        "questions": [],
+                        "report_insights": minimal_report_insights(),
+                        "extra_fields": {},
+                    },
+                ),
+            ]
+        )
+        service = DemandAnalysisService(
+            storage_dir=self.storage_dir,
+            analyzer=LLMAnalyzer(fake_client),
+        )
+
+        task = service.create_task("为新婚人群设计真丝小方巾。")
+        report = service.get_report(task.demand_task_id)["report_json"]
+
+        self.assertEqual(fake_client.calls, 2)
+        self.assertEqual(task.analysis_mode, "llm_enhanced")
+        self.assertEqual(task.llm_status, "success_repaired")
+        self.assertEqual(task.llm_repair_status, "success")
+        self.assertEqual(task.llm_repair_attempts, 1)
+        self.assertEqual(report["llm_repair_status"], "success")
+        self.assertEqual(report["llm_repair_attempts"], 1)
+
+    def test_missing_report_insights_are_repaired(self):
+        fake_client = SequenceFakeLLMClient(
+            [
+                LLMClientResult(
+                    status="success",
+                    model="deepseek-test",
+                    content={
+                        "intent": {"primary": "新品设计", "secondary": [], "confidence": 0.9},
+                        "fields": {
+                            "target_users": {"value": ["新婚人群"], "source": "explicit", "confidence": 0.9}
+                        },
+                        "questions": [],
+                    },
+                ),
+                LLMClientResult(
+                    status="success",
+                    model="deepseek-test",
+                    content={
+                        "intent": {"primary": "新品设计", "secondary": [], "confidence": 0.9},
+                        "fields": {
+                            "target_users": {"value": ["新婚人群"], "source": "explicit", "confidence": 0.9}
+                        },
+                        "questions": [],
+                        "report_insights": minimal_report_insights(),
+                        "extra_fields": {},
+                    },
+                ),
+            ]
+        )
+        service = DemandAnalysisService(
+            storage_dir=self.storage_dir,
+            analyzer=LLMAnalyzer(fake_client),
+        )
+
+        task = service.create_task("为新婚人群设计丝绸伴手礼。")
+
+        self.assertEqual(task.llm_status, "success_repaired")
+        self.assertEqual(task.report.structured_json["llm_repair_status"], "success")
+        self.assertIn("personas", task.report_insights)
+
+    def test_repair_failure_falls_back_to_rules(self):
+        fake_client = SequenceFakeLLMClient(
+            [
+                LLMClientResult(status="invalid_json", model="deepseek-test", error="invalid json", raw_text="{bad"),
+                LLMClientResult(status="invalid_json", model="deepseek-test", error="still invalid", raw_text="{bad"),
+            ]
+        )
+        service = DemandAnalysisService(
+            storage_dir=self.storage_dir,
+            analyzer=LLMAnalyzer(fake_client),
+        )
+
+        task = service.create_task("为 3 月西湖春游的新婚人群设计一套丝绸伴手礼。")
+        report = service.get_report(task.demand_task_id)["report_json"]
+
+        self.assertEqual(fake_client.calls, 2)
+        self.assertEqual(task.analysis_mode, "rules_fallback")
+        self.assertEqual(task.llm_status, "invalid_json")
+        self.assertEqual(task.llm_repair_status, "failed")
+        self.assertEqual(report["llm_repair_status"], "failed")
+
+    def test_repair_disabled_keeps_invalid_json_fallback(self):
+        fake_client = SequenceFakeLLMClient(
+            [LLMClientResult(status="invalid_json", model="deepseek-test", error="invalid json", raw_text="{bad")]
+        )
+        service = DemandAnalysisService(
+            storage_dir=self.storage_dir,
+            analyzer=LLMAnalyzer(fake_client, repair_enabled=False),
+        )
+
+        task = service.create_task("为新婚人群设计丝绸伴手礼。")
+
+        self.assertEqual(fake_client.calls, 1)
+        self.assertEqual(task.analysis_mode, "rules_fallback")
+        self.assertEqual(task.llm_repair_status, "disabled")
+        self.assertEqual(task.llm_repair_attempts, 0)
 
     def test_design_requirement_primary_intent_is_new_product_design(self):
         intent = parse_intent("为 3 月西湖春游的新婚人群设计一套丝绸伴手礼。")
@@ -446,7 +587,7 @@ class DemandAnalysisServiceTest(unittest.TestCase):
                             },
                         },
                         "questions": [],
-                        "report_insights": {"risk_notes": ["控制包装成本"]},
+                        "report_insights": minimal_report_insights(),
                     },
                 ),
             ]
