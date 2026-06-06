@@ -315,6 +315,39 @@ class DemandAnalysisServiceTest(unittest.TestCase):
         self.assertEqual(len(task.questions), 3)
         self.assertNotIn("unknown_field", [question.field for question in task.questions])
 
+    def test_llm_string_report_insights_do_not_break_markdown(self):
+        fake_client = FakeLLMClient(
+            LLMClientResult(
+                status="success",
+                model="deepseek-test",
+                content={
+                    "intent": {"primary": "新品设计", "secondary": [], "confidence": 0.9},
+                    "fields": {
+                        "target_users": {"value": ["新婚人群"], "source": "explicit", "confidence": 0.9},
+                        "usage_scenarios": {"value": ["婚礼回礼"], "source": "explicit", "confidence": 0.9},
+                        "product_categories": {"value": ["丝巾"], "source": "explicit", "confidence": 0.9},
+                    },
+                    "questions": [],
+                    "report_insights": {
+                        "personas": ["新婚人群", "婚礼宾客"],
+                        "scenario_map": ["婚礼回礼", "春游纪念"],
+                    },
+                },
+            )
+        )
+        service = DemandAnalysisService(
+            storage_dir=self.storage_dir,
+            analyzer=LLMAnalyzer(fake_client),
+        )
+
+        task = service.create_task("为新婚人群设计一套丝巾。")
+        report = service.get_report(task.demand_task_id)
+
+        self.assertIn("新婚人群", report["report_markdown"])
+        self.assertIn("婚礼回礼", report["report_markdown"])
+        self.assertIsInstance(report["report_json"]["personas"][0], dict)
+        self.assertIsInstance(report["report_json"]["scenario_map"][0], dict)
+
     def test_design_requirement_primary_intent_is_new_product_design(self):
         intent = parse_intent("为 3 月西湖春游的新婚人群设计一套丝绸伴手礼。")
 

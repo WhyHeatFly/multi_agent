@@ -283,12 +283,16 @@ class DemandAnalysisService:
             "## 3. 目标人群画像",
         ]
         for persona in report["personas"]:
+            if not isinstance(persona, dict):
+                persona = {"name": str(persona), "motivation": "待补充", "design_implication": "待补充"}
             lines.append(
                 f"- {persona.get('name', '目标用户')}：{persona.get('motivation', '待补充')}；"
                 f"设计启示：{persona.get('design_implication', '待补充')}"
             )
         lines.extend(["", "## 4. 场景拆解"])
         for scenario in report["scenario_map"]:
+            if not isinstance(scenario, dict):
+                scenario = {"scenario": str(scenario), "user_goal": "待补充", "product_requirements": ["待补充"]}
             requirements = scenario.get("product_requirements", [])
             if isinstance(requirements, list):
                 requirements_text = "、".join(str(item) for item in requirements)

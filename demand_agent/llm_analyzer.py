@@ -229,15 +229,22 @@ class LLMAnalyzer:
     def _clean_report_insights(self, value: Any) -> dict[str, Any]:
         if not isinstance(value, dict):
             return {}
-        allowed = {
-            "personas",
-            "scenario_map",
-            "product_recommendations",
-            "constraints",
-            "risk_notes",
-            "trend_summary",
-        }
-        return {key: value[key] for key in allowed if key in value}
+        cleaned: dict[str, Any] = {}
+        personas = clean_personas(value.get("personas"))
+        if personas:
+            cleaned["personas"] = personas
+        scenarios = clean_scenarios(value.get("scenario_map"))
+        if scenarios:
+            cleaned["scenario_map"] = scenarios
+        if isinstance(value.get("product_recommendations"), dict):
+            cleaned["product_recommendations"] = value["product_recommendations"]
+        if isinstance(value.get("constraints"), dict):
+            cleaned["constraints"] = value["constraints"]
+        if isinstance(value.get("risk_notes"), list):
+            cleaned["risk_notes"] = [str(item) for item in value["risk_notes"] if item]
+        if isinstance(value.get("trend_summary"), dict):
+            cleaned["trend_summary"] = value["trend_summary"]
+        return cleaned
 
 
 def normalize_value(value: Any) -> Any:
@@ -259,3 +266,39 @@ def clamp_float(value: Any, default: float) -> float:
     except (TypeError, ValueError):
         number = float(default)
     return max(0.0, min(1.0, number))
+
+
+def clean_personas(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    personas = []
+    for item in value:
+        if isinstance(item, dict):
+            personas.append(item)
+        elif isinstance(item, str) and item.strip():
+            personas.append(
+                {
+                    "name": item.strip(),
+                    "motivation": "待补充",
+                    "design_implication": "待补充",
+                }
+            )
+    return personas
+
+
+def clean_scenarios(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    scenarios = []
+    for item in value:
+        if isinstance(item, dict):
+            scenarios.append(item)
+        elif isinstance(item, str) and item.strip():
+            scenarios.append(
+                {
+                    "scenario": item.strip(),
+                    "user_goal": "待补充",
+                    "product_requirements": ["待补充"],
+                }
+            )
+    return scenarios
