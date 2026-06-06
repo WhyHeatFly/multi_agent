@@ -79,6 +79,7 @@ class DemandTask:
     llm_error: str | None = None
     report_insights: dict[str, Any] = field(default_factory=dict)
     extra_fields: dict[str, Any] = field(default_factory=dict)
+    conversation_turns: list[dict[str, Any]] = field(default_factory=list)
     version: str = "v1.0"
     history: list[dict[str, Any]] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))

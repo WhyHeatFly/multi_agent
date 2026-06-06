@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from .llm_analyzer import LLMAnalyzer
@@ -11,6 +14,7 @@ from .rules import (
     apply_answer,
     build_questions,
     completeness_score,
+    extract_fields,
 )
 from .storage import DemandStorage
 
@@ -56,21 +60,69 @@ class DemandAnalysisService:
         }
 
     def submit_answers(self, demand_task_id: str, answers: dict) -> dict:
+        return self.add_followup(demand_task_id, answers=answers)
+
+    def add_followup(self, demand_task_id: str, message: str | None = None, answers: dict | None = None) -> dict:
         task = self.get_task(demand_task_id)
-        changed = []
+        answers = answers or {}
+        message = (message or "").strip()
+        if not message and not answers:
+            raise ValueError("message or answers is required")
+
+        before_fields = self._fields_json(task)
+        submitted_questions = [question.to_dict() for question in task.questions]
         for field_name, value in answers.items():
-            field = apply_answer(task.fields, field_name, value, task.version)
-            changed.append(field.to_dict())
-        task.record("answers_submitted", {"answers": answers, "changed_fields": changed})
-        self._score_and_finish(task)
+            apply_answer(task.fields, field_name, value, task.version)
+
+        analysis_input = self._followup_analysis_input(message, answers)
+        result = self.analyzer.analyze(
+            analysis_input,
+            task.context,
+            task.version,
+            existing_fields=task.fields,
+            conversation_turns=task.conversation_turns,
+            current_questions=task.questions,
+        )
+
+        if result.analysis_mode == "llm_enhanced":
+            task.intent = result.intent
+            task.fields = result.fields
+            task.questions = result.questions
+            task.report_insights = result.report_insights
+            task.extra_fields.update(result.extra_fields)
+        elif message:
+            self._merge_message_fields(task, message)
+
+        task.analysis_mode = result.analysis_mode
+        task.llm_status = result.status
+        task.llm_model = result.model
+        task.llm_error = result.error
+
+        changed = self._changed_fields(before_fields, task)
+        turn = {
+            "turn_index": len(task.conversation_turns) + 1,
+            "message": message,
+            "answers": answers,
+            "submitted_questions": submitted_questions,
+            "changed_fields": changed,
+            "analysis_mode": task.analysis_mode,
+            "llm_status": task.llm_status,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        task.conversation_turns.append(turn)
+        task.record("followup_submitted", turn)
+        self._score_and_finish(task, preserve_questions=task.analysis_mode == "llm_enhanced")
         task.touch()
         self._persist(task)
         return {
             "demand_task_id": task.demand_task_id,
             "status": task.status.value,
             "changed_fields": changed,
+            "questions": [question.to_dict() for question in task.questions],
             "next_action": self._next_action(task),
             "completeness_score": completeness_score(task.fields),
+            "report_id": task.report.report_id if task.report else None,
+            "report_files": self.storage.report_files(task.report.report_id) if task.report else None,
         }
 
     def get_report(self, demand_task_id: str) -> dict:
@@ -212,6 +264,8 @@ class DemandAnalysisService:
             "weak_fields": weak_fields,
             "pending_questions": [question.to_dict() for question in task.questions],
             "recommended_action": self._next_action(task),
+            "conversation_turns": task.conversation_turns,
+            "latest_followup": task.conversation_turns[-1] if task.conversation_turns else None,
         }
 
     def _markdown_report(self, report: dict) -> str:
@@ -335,6 +389,34 @@ class DemandAnalysisService:
                 }
             )
         return base
+
+    def _followup_analysis_input(self, message: str, answers: dict[str, Any]) -> str:
+        parts = []
+        if message:
+            parts.append(f"用户补充需求：{message}")
+        if answers:
+            parts.append(f"用户回答追问：{json.dumps(answers, ensure_ascii=False)}")
+        return "\n".join(parts)
+
+    def _merge_message_fields(self, task: DemandTask, message: str) -> None:
+        extracted = extract_fields(message, task.context)
+        for name, field in extracted.items():
+            if field.source == FieldSource.CONTEXT and name in task.fields:
+                continue
+            if field.source == FieldSource.EXPLICIT:
+                field.source = FieldSource.USER_CONFIRMED
+                field.confidence = max(field.confidence, 0.92)
+            current = task.fields.get(name)
+            if current is None or current.source not in {FieldSource.USER_CONFIRMED, FieldSource.CONTEXT}:
+                task.fields[name] = field
+
+    def _changed_fields(self, before_fields: dict[str, dict], task: DemandTask) -> list[dict]:
+        changed = []
+        after_fields = self._fields_json(task)
+        for name, field in after_fields.items():
+            if stable_json(before_fields.get(name)) != stable_json(field):
+                changed.append(field)
+        return changed
 
     def _field_values(self, task: DemandTask) -> dict:
         return {name: field.field_value for name, field in task.fields.items()}
@@ -472,6 +554,10 @@ def first(value, default=None):
     if isinstance(value, list):
         return value[0] if value else default
     return value if value is not None else default
+
+
+def stable_json(value) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
 def scenario_goal(scenario: str) -> str:

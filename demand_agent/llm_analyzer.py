@@ -36,13 +36,23 @@ class LLMAnalyzer:
     def __init__(self, client: DeepSeekClient | None = None) -> None:
         self.client = client or DeepSeekClient.from_env()
 
-    def analyze(self, user_input: str, context: dict[str, Any] | None = None, version: str = "v1.0") -> SemanticAnalysisResult:
+    def analyze(
+        self,
+        user_input: str,
+        context: dict[str, Any] | None = None,
+        version: str = "v1.0",
+        existing_fields: dict[str, DemandField] | None = None,
+        conversation_turns: list[dict[str, Any]] | None = None,
+        current_questions: list[ClarifyingQuestion] | None = None,
+    ) -> SemanticAnalysisResult:
         context = context or {}
         rule_intent = parse_intent(user_input)
-        rule_fields = extract_fields(user_input, context)
+        rule_fields = self._merge_fields(existing_fields or {}, extract_fields(user_input, context))
         rule_questions = build_questions(rule_fields)
 
-        response = self.client.complete_json(self._messages(user_input, context))
+        response = self.client.complete_json(
+            self._messages(user_input, context, existing_fields or {}, conversation_turns or [], current_questions or [])
+        )
         if response.status != "success" or response.content is None:
             return SemanticAnalysisResult(
                 status=response.status,
@@ -87,12 +97,20 @@ class LLMAnalyzer:
                 questions=rule_questions,
             )
 
-    def _messages(self, user_input: str, context: dict[str, Any]) -> list[dict[str, str]]:
+    def _messages(
+        self,
+        user_input: str,
+        context: dict[str, Any],
+        existing_fields: dict[str, DemandField],
+        conversation_turns: list[dict[str, Any]],
+        current_questions: list[ClarifyingQuestion],
+    ) -> list[dict[str, str]]:
         field_schema = {name: label for name, label in FIELD_LABELS.items()}
         field_schema["brand_context"] = "品牌上下文"
         system_prompt = (
             "你是文化产品需求分析师 Agent。请输出严格 json，不要输出 markdown。\n"
             "你的任务是从中文自然语言需求中识别意图、标准字段、澄清问题和报告洞察。\n"
+            "如果提供了 existing_fields 和 conversation_turns，请在已有字段基础上吸收新增需求，不要丢失已确认字段。\n"
             "fields 只能使用给定字段名；不确定但有价值的新字段放入 extra_fields。\n"
             "字段 source 只能是 explicit、context、inferred、assumption。\n"
             "不要编造实时趋势数据；未接入外部数据时标注为 LLM语义推断。\n"
@@ -101,6 +119,9 @@ class LLMAnalyzer:
         user_payload = {
             "user_input": user_input,
             "context": context,
+            "existing_fields": {name: field.to_dict() for name, field in existing_fields.items()},
+            "conversation_turns": conversation_turns[-6:],
+            "current_questions": [question.to_dict() for question in current_questions],
             "allowed_fields": field_schema,
             "example_json": {
                 "intent": {"primary": "新品设计", "secondary": ["礼品定制"], "confidence": 0.9},

@@ -23,6 +23,7 @@ http://127.0.0.1:8000/demo
 ```
 
 展示页会调用本地 API，演示需求输入、字段抽取、完整度评分、追问、报告预览和下游 Agent 任务包生成。
+用户可以在展示页中持续回答追问或输入自由补充需求，系统会刷新同一个报告。
 
 ## 启用 LLM 语义分析
 
@@ -65,5 +66,6 @@ curl -X POST http://127.0.0.1:8000/v1/agents/demand-analysis/tasks \
 - `POST /v1/agents/demand-analysis/tasks`
 - `GET /v1/agents/demand-analysis/tasks/{demand_task_id}/questions`
 - `POST /v1/agents/demand-analysis/tasks/{demand_task_id}/answers`
+- `POST /v1/agents/demand-analysis/tasks/{demand_task_id}/followups`
 - `GET /v1/agents/demand-analysis/tasks/{demand_task_id}/report`
 - `POST /v1/agents/demand-analysis/tasks/{demand_task_id}/handoff`

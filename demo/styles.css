@@ -428,6 +428,37 @@ tr:last-child td {
   gap: 12px;
 }
 
+.turn-list {
+  display: grid;
+  gap: 10px;
+}
+
+.turn-item {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.turn-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.turn-item p {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.turn-item small {
+  color: var(--muted);
+  font-weight: 700;
+}
+
 .handoff-item {
   border: 1px solid var(--line);
   border-radius: 8px;

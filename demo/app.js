@@ -12,6 +12,7 @@ const elements = {
   userInput: document.querySelector("#userInput"),
   brandInput: document.querySelector("#brandInput"),
   channelsInput: document.querySelector("#channelsInput"),
+  followupInput: document.querySelector("#followupInput"),
   notice: document.querySelector("#notice"),
   projectTitle: document.querySelector("#projectTitle"),
   scoreValue: document.querySelector("#scoreValue"),
@@ -20,6 +21,7 @@ const elements = {
   questionsPanel: document.querySelector("#questionsPanel"),
   questionCount: document.querySelector("#questionCount"),
   reportPreview: document.querySelector("#reportPreview"),
+  turnsPanel: document.querySelector("#turnsPanel"),
   handoffPanel: document.querySelector("#handoffPanel"),
 };
 
@@ -34,6 +36,10 @@ elements.submitAnswersButton.addEventListener("click", async () => {
 
 elements.handoffButton.addEventListener("click", async () => {
   await generateHandoff();
+});
+
+elements.followupInput.addEventListener("input", () => {
+  elements.submitAnswersButton.disabled = !state.taskId;
 });
 
 elements.questionsPanel.addEventListener("click", (event) => {
@@ -106,17 +112,19 @@ async function submitAnswers() {
       answers[question.field] = input.value.trim();
     }
   }
-  if (Object.keys(answers).length === 0) {
-    showNotice("请至少填写一个追问答案。", "warning");
+  const message = elements.followupInput.value.trim();
+  if (Object.keys(answers).length === 0 && !message) {
+    showNotice("请至少填写一个追问答案，或输入一段自由补充需求。", "warning");
     return;
   }
 
-  setLoading(true, "正在提交追问答案...");
+  setLoading(true, "正在提交补充内容...");
   try {
-    await requestJson(`/v1/agents/demand-analysis/tasks/${state.taskId}/answers`, {
+    await requestJson(`/v1/agents/demand-analysis/tasks/${state.taskId}/followups`, {
       method: "POST",
-      body: JSON.stringify({ answers }),
+      body: JSON.stringify({ message, answers }),
     });
+    elements.followupInput.value = "";
     await refreshQuestions();
     await refreshReport();
   } catch (error) {
@@ -163,6 +171,7 @@ function renderReport(data) {
   elements.scoreValue.textContent = data.completeness_score ?? report.completeness_score ?? "--";
   renderMeta(data, report);
   renderFields(report.fields || {});
+  renderTurns(report.conversation_turns || []);
   elements.reportPreview.classList.remove("empty");
   elements.reportPreview.innerHTML = markdownToHtml(data.report_markdown || "暂无报告。");
 
@@ -220,7 +229,7 @@ function renderFields(fields) {
 
 function renderQuestions() {
   elements.questionCount.textContent = String(state.questions.length);
-  elements.submitAnswersButton.disabled = !state.taskId || state.questions.length === 0;
+  elements.submitAnswersButton.disabled = !state.taskId;
   if (state.questions.length === 0) {
     elements.questionsPanel.className = "question-list empty";
     elements.questionsPanel.textContent = "暂无待确认问题。";
@@ -248,6 +257,34 @@ function renderQuestions() {
         </div>
       `,
     )
+    .join("");
+}
+
+function renderTurns(turns) {
+  if (turns.length === 0) {
+    elements.turnsPanel.className = "turn-list empty";
+    elements.turnsPanel.textContent = "暂无补充记录。";
+    return;
+  }
+  elements.turnsPanel.className = "turn-list";
+  elements.turnsPanel.innerHTML = turns
+    .map((turn) => {
+      const changed = (turn.changed_fields || []).map((field) => field.field_name).join("、") || "无字段变化";
+      const answers = Object.keys(turn.answers || {}).length
+        ? JSON.stringify(turn.answers, null, 2)
+        : "未填写追问答案";
+      return `
+        <section class="turn-item">
+          <div class="turn-title">
+            <strong>第 ${escapeHtml(turn.turn_index || "-")} 轮补充</strong>
+            ${badge(turn.llm_status || turn.analysis_mode || "--", turn.llm_status || turn.analysis_mode)}
+          </div>
+          <p>${escapeHtml(turn.message || "仅提交追问答案")}</p>
+          <pre>${escapeHtml(answers)}</pre>
+          <small>字段变化：${escapeHtml(changed)}</small>
+        </section>
+      `;
+    })
     .join("");
 }
 
@@ -308,7 +345,7 @@ function markdownToHtml(markdown) {
 
 function setLoading(isLoading, message = "") {
   elements.analyzeButton.disabled = isLoading;
-  elements.submitAnswersButton.disabled = isLoading || state.questions.length === 0;
+  elements.submitAnswersButton.disabled = isLoading || !state.taskId;
   elements.handoffButton.disabled = isLoading || !state.taskId;
   elements.analyzeButton.textContent = isLoading ? "处理中..." : "分析需求";
   if (message) showNotice(message, "success");

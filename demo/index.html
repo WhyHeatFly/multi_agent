@@ -38,7 +38,15 @@
               <span id="questionCount" class="counter">0</span>
             </div>
             <div id="questionsPanel" class="question-list empty">分析后会在这里显示待确认问题。</div>
-            <button id="submitAnswersButton" type="button" disabled>提交回答并刷新报告</button>
+            <label>
+              <span>自由补充需求</span>
+              <textarea
+                id="followupInput"
+                rows="4"
+                placeholder="例如：预算控制在300元以内，整体风格更年轻一点。"
+              ></textarea>
+            </label>
+            <button id="submitAnswersButton" type="button" disabled>提交补充并刷新报告</button>
           </section>
 
           <section class="section-block" aria-label="下游交接">
@@ -103,6 +111,13 @@
               <h2>报告预览</h2>
             </div>
             <article id="reportPreview" class="report-preview empty">暂无报告。</article>
+          </section>
+
+          <section class="section-block">
+            <div class="section-heading">
+              <h2>补充记录</h2>
+            </div>
+            <div id="turnsPanel" class="turn-list empty">暂无补充记录。</div>
           </section>
 
           <section class="section-block">

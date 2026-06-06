@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from demand_agent import DemandAnalysisService
+import demand_agent.api as api_module
 from demand_agent.api import DemandAgentHandler
 from demand_agent.llm_analyzer import LLMAnalyzer
 from demand_agent.llm_client import DeepSeekClient, LLMClientResult
@@ -22,11 +23,27 @@ class FakeLLMClient:
         return self.result
 
 
+class SequenceFakeLLMClient:
+    def __init__(self, results):
+        self.results = list(results)
+        self.calls = 0
+
+    def complete_json(self, messages, max_tokens=3000):
+        self.calls += 1
+        if self.results:
+            return self.results.pop(0)
+        return LLMClientResult(status="disabled", model="test")
+
+
 class FakeHandler(DemandAgentHandler):
-    def __init__(self):
+    def __init__(self, path="/", payload=None):
         self.wfile = BytesIO()
         self.status = None
         self.response_headers = {}
+        self.path = path
+        body = json.dumps(payload or {}, ensure_ascii=False).encode("utf-8")
+        self.rfile = BytesIO(body)
+        self.headers = {"Content-Length": str(len(body))}
 
     def send_response(self, code, message=None):
         self.status = code
@@ -333,7 +350,98 @@ class DemandAnalysisServiceTest(unittest.TestCase):
         self.assertEqual(client.model, "deepseek-test")
         self.assertEqual(client.timeout_seconds, 7)
 
+    def test_free_followup_updates_fields_and_refreshes_report(self):
+        task = self.service.create_task("帮我做一个文创礼品。")
+        before = self.service.get_report(task.demand_task_id)["completeness_score"]
+
+        result = self.service.add_followup(
+            task.demand_task_id,
+            message="预算控制在300元以内，整体风格偏年轻国潮，主要在小红书销售。",
+        )
+        report = self.service.get_report(task.demand_task_id)["report_json"]
+
+        self.assertGreater(result["completeness_score"], before)
+        self.assertEqual(task.fields["budget_range"].field_value, "300元以内")
+        self.assertEqual(task.fields["budget_range"].source, FieldSource.USER_CONFIRMED)
+        self.assertIn("年轻国潮", task.fields["aesthetic_preferences"].field_value)
+        self.assertEqual(len(task.conversation_turns), 1)
+        self.assertEqual(report["latest_followup"]["message"], "预算控制在300元以内，整体风格偏年轻国潮，主要在小红书销售。")
+
+    def test_answers_endpoint_reuses_followup_history(self):
+        task = self.service.create_task("帮我做一个文创礼品。")
+
+        result = self.service.submit_answers(task.demand_task_id, {"target_users": "游客"})
+
+        self.assertEqual(task.fields["target_users"].source, FieldSource.USER_CONFIRMED)
+        self.assertEqual(len(task.conversation_turns), 1)
+        self.assertEqual(task.conversation_turns[0]["answers"], {"target_users": "游客"})
+        self.assertIn("questions", result)
+
+    def test_multiple_followups_are_persisted_and_reloaded(self):
+        task = self.service.create_task("帮我做一个文创礼品。")
+        self.service.add_followup(task.demand_task_id, message="主要面向游客。")
+        self.service.add_followup(task.demand_task_id, answers={"budget_range": "300元以内"})
+
+        reloaded_service = DemandAnalysisService(
+            storage_dir=self.storage_dir,
+            analyzer=LLMAnalyzer(FakeLLMClient(LLMClientResult(status="disabled", model="test"))),
+        )
+        reloaded = reloaded_service.get_task(task.demand_task_id)
+
+        self.assertEqual(len(reloaded.conversation_turns), 2)
+        self.assertEqual(reloaded.conversation_turns[1]["answers"], {"budget_range": "300元以内"})
+
+    def test_llm_followup_merges_existing_fields(self):
+        fake_client = SequenceFakeLLMClient(
+            [
+                LLMClientResult(status="disabled", model="test"),
+                LLMClientResult(
+                    status="success",
+                    model="deepseek-test",
+                    content={
+                        "intent": {"primary": "新品设计", "secondary": ["礼品定制"], "confidence": 0.9},
+                        "fields": {
+                            "budget_range": {
+                                "value": "300元以内",
+                                "source": "explicit",
+                                "confidence": 0.94,
+                            },
+                            "aesthetic_preferences": {
+                                "value": ["年轻国潮"],
+                                "source": "explicit",
+                                "confidence": 0.9,
+                            },
+                        },
+                        "questions": [],
+                        "report_insights": {"risk_notes": ["控制包装成本"]},
+                    },
+                ),
+            ]
+        )
+        service = DemandAnalysisService(
+            storage_dir=self.storage_dir,
+            analyzer=LLMAnalyzer(fake_client),
+        )
+        task = service.create_task("为新婚人群设计一套丝绸伴手礼。")
+
+        result = service.add_followup(task.demand_task_id, message="预算控制在300元以内，风格更年轻。")
+
+        self.assertEqual(fake_client.calls, 2)
+        self.assertIn("target_users", task.fields)
+        self.assertEqual(task.fields["budget_range"].field_value, "300元以内")
+        self.assertEqual(task.analysis_mode, "llm_enhanced")
+        self.assertEqual(result["report_id"], task.report.report_id)
+
+    def test_empty_followup_is_rejected(self):
+        task = self.service.create_task("帮我做一个文创礼品。")
+
+        with self.assertRaises(ValueError):
+            self.service.add_followup(task.demand_task_id)
+
 class DemandAgentApiTest(unittest.TestCase):
+    def tearDown(self):
+        api_module.SERVICE = None
+
     def test_demo_index_is_served(self):
         handler = FakeHandler()
         handler._static("/demo")
@@ -358,6 +466,39 @@ class DemandAgentApiTest(unittest.TestCase):
 
         self.assertEqual(handler.status, 400)
         self.assertEqual(handler.response_headers["Access-Control-Allow-Origin"], "*")
+
+    def test_empty_followup_request_returns_400(self):
+        with TemporaryDirectory() as tmp:
+            api_module.SERVICE = DemandAnalysisService(
+                storage_dir=Path(tmp),
+                analyzer=LLMAnalyzer(FakeLLMClient(LLMClientResult(status="disabled", model="test"))),
+            )
+            task = api_module.SERVICE.create_task("帮我做一个文创礼品。")
+            handler = FakeHandler(
+                path=f"/v1/agents/demand-analysis/tasks/{task.demand_task_id}/followups",
+                payload={},
+            )
+
+            handler.do_POST()
+
+        body = json.loads(handler.wfile.getvalue().decode("utf-8"))
+        self.assertEqual(handler.status, 400)
+        self.assertEqual(body["error"], "message or answers is required")
+
+    def test_unknown_followup_task_returns_404(self):
+        with TemporaryDirectory() as tmp:
+            api_module.SERVICE = DemandAnalysisService(
+                storage_dir=Path(tmp),
+                analyzer=LLMAnalyzer(FakeLLMClient(LLMClientResult(status="disabled", model="test"))),
+            )
+            handler = FakeHandler(
+                path="/v1/agents/demand-analysis/tasks/demand_missing/followups",
+                payload={"message": "补充预算"},
+            )
+
+            handler.do_POST()
+
+        self.assertEqual(handler.status, 404)
 
 
 if __name__ == "__main__":

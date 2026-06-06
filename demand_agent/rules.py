@@ -220,7 +220,10 @@ def extract_fields(text: str, context: dict[str, Any] | None = None) -> dict[str
     if time_values:
         fields["time"] = DemandField("time", unique([v.replace(" ", "") for v in time_values]), FieldSource.EXPLICIT, 0.92)
 
-    budget_match = re.search(r"(\d+\s*[-到至]\s*\d+\s*元|\d+\s*元以上|千元以上|[一二三四五六七八九]百元)", text)
+    budget_match = re.search(
+        r"(\d+\s*[-到至]\s*\d+\s*元|\d+\s*元以上|\d+\s*元以内|不超过\s*\d+\s*元|千元以上|[一二三四五六七八九]百元)",
+        text,
+    )
     if budget_match:
         fields["budget_range"] = DemandField("budget_range", budget_match.group(1).replace(" ", ""), FieldSource.EXPLICIT, 0.9)
 

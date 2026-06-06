@@ -49,6 +49,14 @@ class DemandAgentHandler(BaseHTTPRequestHandler):
                     result = get_service().submit_answers(demand_task_id, payload.get("answers") or {})
                     self._json(result)
                     return
+                if action == "followups":
+                    result = get_service().add_followup(
+                        demand_task_id,
+                        message=payload.get("message"),
+                        answers=payload.get("answers") or {},
+                    )
+                    self._json(result)
+                    return
                 if action == "handoff":
                     result = get_service().handoff(demand_task_id, payload.get("target_agents") or [])
                     self._json(result)
@@ -57,6 +65,8 @@ class DemandAgentHandler(BaseHTTPRequestHandler):
             self._json({"error": "not found"}, status=404)
         except KeyError as exc:
             self._json({"error": str(exc)}, status=404)
+        except ValueError as exc:
+            self._json({"error": str(exc)}, status=400)
         except json.JSONDecodeError:
             self._json({"error": "invalid json"}, status=400)
 
