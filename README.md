@@ -11,8 +11,14 @@ python3 -m unittest
 ## 启动 API
 
 ```bash
-python3 -m demand_agent.api --host 127.0.0.1 --port 8000
+python3 -m demand_agent.api --host 127.0.0.1 --port 8000 --storage-dir outputs
 ```
+
+默认会持久化到：
+
+- SQLite 数据库：`outputs/demand_agent.sqlite3`
+- 报告 JSON：`outputs/demand_reports/{report_id}.json`
+- 报告 Markdown：`outputs/demand_reports/{report_id}.md`
 
 ## 示例调用
 

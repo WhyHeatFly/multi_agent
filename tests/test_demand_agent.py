@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 
 from demand_agent import DemandAnalysisService
@@ -6,7 +9,12 @@ from demand_agent.models import FieldSource, TaskStatus
 
 class DemandAnalysisServiceTest(unittest.TestCase):
     def setUp(self):
-        self.service = DemandAnalysisService()
+        self.tmp = TemporaryDirectory()
+        self.storage_dir = Path(self.tmp.name)
+        self.service = DemandAnalysisService(storage_dir=self.storage_dir)
+
+    def tearDown(self):
+        self.tmp.cleanup()
 
     def test_one_sentence_requirement_extracts_core_fields(self):
         task = self.service.create_task("为 3 月西湖春游的新婚人群设计一套丝绸伴手礼。")
@@ -99,6 +107,30 @@ class DemandAnalysisServiceTest(unittest.TestCase):
         self.assertIn("product_categories", designer_inputs)
         self.assertIn("materials", designer_inputs)
         self.assertIn("budget_range", packages["designer_agent"]["constraints"])
+
+    def test_report_is_persisted_to_sqlite_and_output_files(self):
+        task = self.service.create_task(
+            "为 3 月西湖春游的新婚人群设计一套丝绸伴手礼。",
+            {"target_channel": ["小红书"]},
+        )
+        report = self.service.get_report(task.demand_task_id)
+        files = report["report_files"]
+
+        json_path = Path(files["json_path"])
+        markdown_path = Path(files["markdown_path"])
+        self.assertTrue((self.storage_dir / "demand_agent.sqlite3").exists())
+        self.assertTrue(json_path.exists())
+        self.assertTrue(markdown_path.exists())
+
+        saved_json = json.loads(json_path.read_text(encoding="utf-8"))
+        saved_markdown = markdown_path.read_text(encoding="utf-8")
+        self.assertEqual(saved_json["demand_task_id"], task.demand_task_id)
+        self.assertIn("#", saved_markdown)
+
+        reloaded_service = DemandAnalysisService(storage_dir=self.storage_dir)
+        reloaded = reloaded_service.get_report(task.demand_task_id)
+        self.assertEqual(reloaded["report_id"], report["report_id"])
+        self.assertEqual(reloaded["report_json"]["demand_task_id"], task.demand_task_id)
 
 
 if __name__ == "__main__":

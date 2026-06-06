@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from uuid import uuid4
 
 from .models import DemandReport, DemandTask, FieldSource, TaskStatus
@@ -12,11 +13,13 @@ from .rules import (
     extract_fields,
     parse_intent,
 )
+from .storage import DemandStorage
 
 
 class DemandAnalysisService:
-    def __init__(self) -> None:
-        self.tasks: dict[str, DemandTask] = {}
+    def __init__(self, storage: DemandStorage | None = None, storage_dir: str | Path = "outputs") -> None:
+        self.storage = storage or DemandStorage(storage_dir)
+        self.tasks: dict[str, DemandTask] = self.storage.load_all_tasks()
 
     def create_task(self, user_input: str, context: dict | None = None) -> DemandTask:
         task = DemandTask(
@@ -28,13 +31,17 @@ class DemandAnalysisService:
         task.record("created", {"user_input": user_input})
         self.tasks[task.demand_task_id] = task
         self._analyze(task)
+        self._persist(task)
         return task
 
     def get_task(self, demand_task_id: str) -> DemandTask:
-        try:
+        if demand_task_id in self.tasks:
             return self.tasks[demand_task_id]
-        except KeyError as exc:
-            raise KeyError(f"Demand task not found: {demand_task_id}") from exc
+        task = self.storage.load_task(demand_task_id)
+        if task:
+            self.tasks[demand_task_id] = task
+            return task
+        raise KeyError(f"Demand task not found: {demand_task_id}")
 
     def get_questions(self, demand_task_id: str) -> dict:
         task = self.get_task(demand_task_id)
@@ -52,6 +59,7 @@ class DemandAnalysisService:
         task.record("answers_submitted", {"answers": answers, "changed_fields": changed})
         self._score_and_finish(task)
         task.touch()
+        self._persist(task)
         return {
             "demand_task_id": task.demand_task_id,
             "status": task.status.value,
@@ -64,12 +72,14 @@ class DemandAnalysisService:
         task = self.get_task(demand_task_id)
         if task.report is None:
             self._generate_report(task)
+        self._persist(task)
         return {
             "report_id": task.report.report_id,
             "status": "completed" if task.status in {TaskStatus.REPORT_READY, TaskStatus.CONFIRMED, TaskStatus.HANDOFF} else task.status.value,
             "completeness_score": task.report.completeness_score,
             "report_markdown": task.report.markdown,
             "report_json": task.report.structured_json,
+            "report_files": self.storage.report_files(task.report.report_id),
         }
 
     def handoff(self, demand_task_id: str, target_agents: list[str]) -> dict:
@@ -80,6 +90,7 @@ class DemandAnalysisService:
         packages = [self._build_handoff_package(task, agent) for agent in target_agents]
         task.record("handoff_generated", {"target_agents": target_agents})
         task.touch()
+        self._persist(task)
         return {
             "demand_task_id": task.demand_task_id,
             "status": task.status.value,
@@ -125,7 +136,17 @@ class DemandAnalysisService:
             completeness_score=score,
             version=task.version,
         )
+        paths = self.storage.report_files(task.report.report_id)
+        task.report.structured_json["report_files"] = paths
+        self.storage.save_report_files(task.report)
         return task.report
+
+    def _persist(self, task: DemandTask) -> None:
+        if task.report:
+            paths = self.storage.report_files(task.report.report_id)
+            task.report.structured_json["report_files"] = paths
+            self.storage.save_report_files(task.report)
+        self.storage.save_task(task)
 
     def _structured_report(self, task: DemandTask, score: int) -> dict:
         fields = self._field_values(task)

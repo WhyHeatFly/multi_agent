@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 from .service import DemandAnalysisService
 
 
-SERVICE = DemandAnalysisService()
+SERVICE: DemandAnalysisService | None = None
 
 
 class DemandAgentHandler(BaseHTTPRequestHandler):
@@ -25,19 +25,23 @@ class DemandAgentHandler(BaseHTTPRequestHandler):
                 if not user_input:
                     self._json({"error": "user_input is required"}, status=400)
                     return
-                task = SERVICE.create_task(user_input=user_input, context=payload.get("context") or {})
-                self._json(task.to_summary(), status=201)
+                task = get_service().create_task(user_input=user_input, context=payload.get("context") or {})
+                response = task.to_summary()
+                if task.report:
+                    response["report_id"] = task.report.report_id
+                    response["report_files"] = get_service().storage.report_files(task.report.report_id)
+                self._json(response, status=201)
                 return
 
             if len(parts) == 6 and parts[:3] == ["v1", "agents", "demand-analysis"] and parts[3] == "tasks":
                 demand_task_id = parts[4]
                 action = parts[5]
                 if action == "answers":
-                    result = SERVICE.submit_answers(demand_task_id, payload.get("answers") or {})
+                    result = get_service().submit_answers(demand_task_id, payload.get("answers") or {})
                     self._json(result)
                     return
                 if action == "handoff":
-                    result = SERVICE.handoff(demand_task_id, payload.get("target_agents") or [])
+                    result = get_service().handoff(demand_task_id, payload.get("target_agents") or [])
                     self._json(result)
                     return
 
@@ -55,10 +59,10 @@ class DemandAgentHandler(BaseHTTPRequestHandler):
                 demand_task_id = parts[4]
                 action = parts[5]
                 if action == "questions":
-                    self._json(SERVICE.get_questions(demand_task_id))
+                    self._json(get_service().get_questions(demand_task_id))
                     return
                 if action == "report":
-                    self._json(SERVICE.get_report(demand_task_id))
+                    self._json(get_service().get_report(demand_task_id))
                     return
             self._json({"error": "not found"}, status=404)
         except KeyError as exc:
@@ -83,9 +87,19 @@ class DemandAgentHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def run(host: str = "127.0.0.1", port: int = 8000) -> None:
+def get_service() -> DemandAnalysisService:
+    global SERVICE
+    if SERVICE is None:
+        SERVICE = DemandAnalysisService()
+    return SERVICE
+
+
+def run(host: str = "127.0.0.1", port: int = 8000, storage_dir: str = "outputs") -> None:
+    global SERVICE
+    SERVICE = DemandAnalysisService(storage_dir=storage_dir)
     server = ThreadingHTTPServer((host, port), DemandAgentHandler)
     print(f"Demand Analyst Agent API listening on http://{host}:{port}")
+    print(f"Persistent storage: {storage_dir}")
     server.serve_forever()
 
 
@@ -93,8 +107,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run the Demand Analyst Agent MVP API.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=8000, type=int)
+    parser.add_argument("--storage-dir", default="outputs")
     args = parser.parse_args()
-    run(args.host, args.port)
+    run(args.host, args.port, args.storage_dir)
 
 
 if __name__ == "__main__":
