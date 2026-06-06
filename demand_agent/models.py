@@ -19,6 +19,7 @@ class TaskStatus(str, Enum):
 
 class FieldSource(str, Enum):
     EXPLICIT = "explicit"
+    CONTEXT = "context"
     INFERRED = "inferred"
     ASSUMPTION = "assumption"
     USER_CONFIRMED = "user_confirmed"
@@ -72,6 +73,12 @@ class DemandTask:
     intent: dict[str, Any] = field(default_factory=dict)
     questions: list[ClarifyingQuestion] = field(default_factory=list)
     report: DemandReport | None = None
+    analysis_mode: str = "rules_fallback"
+    llm_status: str = "disabled"
+    llm_model: str | None = None
+    llm_error: str | None = None
+    report_insights: dict[str, Any] = field(default_factory=dict)
+    extra_fields: dict[str, Any] = field(default_factory=dict)
     version: str = "v1.0"
     history: list[dict[str, Any]] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))

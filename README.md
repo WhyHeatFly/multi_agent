@@ -14,6 +14,22 @@ python3 -m unittest
 python3 -m demand_agent.api --host 127.0.0.1 --port 8000 --storage-dir outputs
 ```
 
+## 启用 LLM 语义分析
+
+默认情况下 LLM 关闭，系统使用内置规则分析。需要接入 DeepSeek 时，在项目根目录创建 `.env`：
+
+```bash
+DEMAND_LLM_ENABLED=true
+DEEPSEEK_API_KEY=你的APIKey
+DEMAND_LLM_BASE_URL=https://api.deepseek.com
+DEMAND_LLM_MODEL=deepseek-v4-flash
+DEMAND_LLM_TIMEOUT_SECONDS=30
+```
+
+`.env` 已在 `.gitignore` 中忽略，不会被提交到仓库。系统启动时会自动读取 `.env`；如果同名系统环境变量已经存在，则优先使用系统环境变量。
+
+LLM 调用失败、超时或返回非法 JSON 时，系统会自动回退到规则分析，并在报告中记录 `analysis_mode`、`llm_status`、`llm_model` 和 `llm_error`。
+
 默认会持久化到：
 
 - SQLite 数据库：`outputs/demand_agent.sqlite3`

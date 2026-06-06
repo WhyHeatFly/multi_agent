@@ -178,20 +178,21 @@ def unique(values: list[str]) -> list[str]:
 
 def parse_intent(text: str) -> dict[str, Any]:
     intent_rules = [
-        ("趋势调研", ["趋势", "爆款", "热词", "流行"]),
-        ("旧方案优化", ["优化", "修改", "上次", "调整"]),
-        ("人群洞察", ["人群", "画像", "喜欢什么"]),
-        ("品类选择", ["适合做什么", "推荐品类", "选品"]),
-        ("商业落地", ["销量", "转化", "抖音卖", "淘宝卖", "成本"]),
-        ("新品设计", ["设计", "开发", "做一款", "做一个", "做一套"]),
+        ("趋势调研", ["趋势", "爆款", "热词", "流行"], 4),
+        ("旧方案优化", ["优化", "修改", "上次", "调整"], 4),
+        ("人群洞察", ["画像", "喜欢什么"], 3),
+        ("人群洞察", ["人群"], 1),
+        ("品类选择", ["适合做什么", "推荐品类", "选品"], 3),
+        ("商业落地", ["销量", "转化", "抖音卖", "淘宝卖", "成本"], 3),
+        ("新品设计", ["设计", "开发", "做一款", "做一个", "做一套"], 5),
     ]
+    scores: dict[str, int] = {}
     secondary: list[str] = []
-    primary = "新品设计"
-    for label, words in intent_rules:
+    for label, words, weight in intent_rules:
         if any(word in text for word in words):
-            if primary == "新品设计" and label != "新品设计":
-                primary = label
+            scores[label] = scores.get(label, 0) + weight
             secondary.append(label)
+    primary = max(scores, key=scores.get) if scores else "新品设计"
     if "伴手礼" in text or "礼品" in text:
         secondary.append("礼品定制")
     if "婚" in text:
@@ -228,11 +229,11 @@ def extract_fields(text: str, context: dict[str, Any] | None = None) -> dict[str
             fields["channel_suggestions"] = DemandField(
                 "channel_suggestions",
                 list(context["target_channel"]),
-                FieldSource.EXPLICIT,
+                FieldSource.CONTEXT,
                 0.86,
             )
         if context.get("brand") and "brand_context" not in fields:
-            fields["brand_context"] = DemandField("brand_context", context["brand"], FieldSource.EXPLICIT, 0.86)
+            fields["brand_context"] = DemandField("brand_context", context["brand"], FieldSource.CONTEXT, 0.86)
 
     apply_inferences(fields)
     return fields

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import uuid4
 
+from .llm_analyzer import LLMAnalyzer
 from .models import DemandReport, DemandTask, FieldSource, TaskStatus
 from .rules import (
     DEFAULT_BUDGET,
@@ -10,15 +11,19 @@ from .rules import (
     apply_answer,
     build_questions,
     completeness_score,
-    extract_fields,
-    parse_intent,
 )
 from .storage import DemandStorage
 
 
 class DemandAnalysisService:
-    def __init__(self, storage: DemandStorage | None = None, storage_dir: str | Path = "outputs") -> None:
+    def __init__(
+        self,
+        storage: DemandStorage | None = None,
+        storage_dir: str | Path = "outputs",
+        analyzer: LLMAnalyzer | None = None,
+    ) -> None:
         self.storage = storage or DemandStorage(storage_dir)
+        self.analyzer = analyzer or LLMAnalyzer()
         self.tasks: dict[str, DemandTask] = self.storage.load_all_tasks()
 
     def create_task(self, user_input: str, context: dict | None = None) -> DemandTask:
@@ -99,16 +104,36 @@ class DemandAnalysisService:
 
     def _analyze(self, task: DemandTask) -> None:
         task.status = TaskStatus.PARSING
-        task.intent = parse_intent(task.user_input)
-        task.fields = extract_fields(task.user_input, task.context)
-        task.record("parsed", {"intent": task.intent, "fields": self._fields_json(task)})
-        self._score_and_finish(task)
+        result = self.analyzer.analyze(task.user_input, task.context, task.version)
+        task.intent = result.intent
+        task.fields = result.fields
+        task.questions = result.questions
+        task.analysis_mode = result.analysis_mode
+        task.llm_status = result.status
+        task.llm_model = result.model
+        task.llm_error = result.error
+        task.report_insights = result.report_insights
+        task.extra_fields = result.extra_fields
+        task.record(
+            "parsed",
+            {
+                "analysis_mode": task.analysis_mode,
+                "llm_status": task.llm_status,
+                "llm_model": task.llm_model,
+                "llm_error": task.llm_error,
+                "intent": task.intent,
+                "fields": self._fields_json(task),
+                "extra_fields": task.extra_fields,
+            },
+        )
+        self._score_and_finish(task, preserve_questions=task.analysis_mode == "llm_enhanced")
         task.touch()
 
-    def _score_and_finish(self, task: DemandTask) -> None:
+    def _score_and_finish(self, task: DemandTask, preserve_questions: bool = False) -> None:
         task.status = TaskStatus.SCORING
         score = completeness_score(task.fields)
-        task.questions = build_questions(task.fields)
+        if not preserve_questions:
+            task.questions = build_questions(task.fields)
         has_assumption = any(field.source == FieldSource.ASSUMPTION for field in task.fields.values())
         if score < 60 and task.questions:
             task.status = TaskStatus.NEED_CLARIFICATION
@@ -158,24 +183,31 @@ class DemandAnalysisService:
         confirmed = {
             name: field.field_value
             for name, field in task.fields.items()
-            if field.source in {FieldSource.EXPLICIT, FieldSource.USER_CONFIRMED}
+            if field.source in {FieldSource.EXPLICIT, FieldSource.CONTEXT, FieldSource.USER_CONFIRMED}
         }
         weak_fields = [question.field for question in task.questions]
+        insights = task.report_insights or {}
         return {
             "report_id": f"dr_{task.demand_task_id.removeprefix('demand_')}",
             "demand_task_id": task.demand_task_id,
             "version": task.version,
+            "analysis_mode": task.analysis_mode,
+            "llm_status": task.llm_status,
+            "llm_model": task.llm_model,
+            "llm_error": task.llm_error,
             "project_summary": self._project_summary(fields),
             "original_requirement": task.user_input,
             "intent": task.intent,
             "confirmed_fields": confirmed,
             "assumptions": assumptions,
+            "extra_fields": task.extra_fields,
             "fields": self._fields_json(task),
-            "personas": self._personas(fields),
-            "scenario_map": self._scenario_map(fields),
-            "product_recommendations": self._product_recommendations(fields),
-            "constraints": self._constraints(fields),
-            "trend_summary": self._trend_summary(fields),
+            "personas": insights.get("personas") if isinstance(insights.get("personas"), list) else self._personas(fields),
+            "scenario_map": insights.get("scenario_map") if isinstance(insights.get("scenario_map"), list) else self._scenario_map(fields),
+            "product_recommendations": self._report_product_recommendations(fields, insights),
+            "constraints": insights.get("constraints") if isinstance(insights.get("constraints"), dict) else self._constraints(fields),
+            "risk_notes": insights.get("risk_notes") if isinstance(insights.get("risk_notes"), list) else [],
+            "trend_summary": insights.get("trend_summary") if isinstance(insights.get("trend_summary"), dict) else self._trend_summary(fields),
             "completeness_score": score,
             "weak_fields": weak_fields,
             "pending_questions": [question.to_dict() for question in task.questions],
@@ -197,19 +229,39 @@ class DemandAnalysisService:
             "## 3. 目标人群画像",
         ]
         for persona in report["personas"]:
-            lines.append(f"- {persona['name']}：{persona['motivation']}；设计启示：{persona['design_implication']}")
+            lines.append(
+                f"- {persona.get('name', '目标用户')}：{persona.get('motivation', '待补充')}；"
+                f"设计启示：{persona.get('design_implication', '待补充')}"
+            )
         lines.extend(["", "## 4. 场景拆解"])
         for scenario in report["scenario_map"]:
-            lines.append(f"- {scenario['scenario']}：{scenario['user_goal']}；要求：{'、'.join(scenario['product_requirements'])}")
+            requirements = scenario.get("product_requirements", [])
+            if isinstance(requirements, list):
+                requirements_text = "、".join(str(item) for item in requirements)
+            else:
+                requirements_text = str(requirements)
+            lines.append(
+                f"- {scenario.get('scenario', '使用场景')}：{scenario.get('user_goal', '待补充')}；"
+                f"要求：{requirements_text}"
+            )
         lines.extend(["", "## 5. 产品建议"])
-        for item in report["product_recommendations"]["recommended"]:
-            lines.append(f"- {item['category']}（{item['role']}）：{item['reason']}")
-        lines.extend(["", "## 6. 约束与假设"])
+        for item in report.get("product_recommendations", {}).get("recommended", []):
+            lines.append(
+                f"- {item.get('category', '产品品类')}（{item.get('role', '推荐产品')}）："
+                f"{item.get('reason', '待补充')}"
+            )
+        lines.extend(["", "## 6. 风险提示"])
+        if report["risk_notes"]:
+            for note in report["risk_notes"]:
+                lines.append(f"- {note}")
+        else:
+            lines.append("- 暂无。")
+        lines.extend(["", "## 7. 约束与假设"])
         for key, value in report["assumptions"].items():
             lines.append(f"- {key}: {value}")
         if not report["assumptions"]:
             lines.append("- 暂无系统假设。")
-        lines.extend(["", "## 7. 待确认问题"])
+        lines.extend(["", "## 8. 待确认问题"])
         if report["pending_questions"]:
             for question in report["pending_questions"]:
                 lines.append(f"- {question['question']}")
@@ -379,6 +431,12 @@ class DemandAnalysisService:
                 }
             ],
         }
+
+    def _report_product_recommendations(self, fields: dict, insights: dict) -> dict:
+        recommendations = insights.get("product_recommendations")
+        if isinstance(recommendations, dict) and isinstance(recommendations.get("recommended"), list):
+            return recommendations
+        return self._product_recommendations(fields)
 
     def _constraints(self, fields: dict) -> dict:
         budget = fields.get("budget_range", DEFAULT_BUDGET)

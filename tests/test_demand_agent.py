@@ -4,7 +4,20 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from demand_agent import DemandAnalysisService
+from demand_agent.llm_analyzer import LLMAnalyzer
+from demand_agent.llm_client import DeepSeekClient, LLMClientResult
 from demand_agent.models import FieldSource, TaskStatus
+from demand_agent.rules import parse_intent
+
+
+class FakeLLMClient:
+    def __init__(self, result):
+        self.result = result
+        self.calls = 0
+
+    def complete_json(self, messages, max_tokens=3000):
+        self.calls += 1
+        return self.result
 
 
 class DemandAnalysisServiceTest(unittest.TestCase):
@@ -131,6 +144,173 @@ class DemandAnalysisServiceTest(unittest.TestCase):
         reloaded = reloaded_service.get_report(task.demand_task_id)
         self.assertEqual(reloaded["report_id"], report["report_id"])
         self.assertEqual(reloaded["report_json"]["demand_task_id"], task.demand_task_id)
+
+    def test_llm_success_enhances_fields_questions_and_report_insights(self):
+        fake_client = FakeLLMClient(
+            LLMClientResult(
+                status="success",
+                model="deepseek-test",
+                content={
+                    "intent": {
+                        "primary": "新品设计",
+                        "secondary": ["礼品定制", "婚庆礼品"],
+                        "confidence": 0.94,
+                    },
+                    "fields": {
+                        "target_users": {
+                            "value": ["新婚人群"],
+                            "source": "explicit",
+                            "confidence": 0.91,
+                        },
+                        "usage_scenarios": {
+                            "value": ["婚礼回礼"],
+                            "source": "inferred",
+                            "confidence": 0.8,
+                        },
+                    },
+                    "questions": [
+                        {
+                            "field": "budget_range",
+                            "question": "期望单套预算大致是多少？",
+                            "options": ["99-199元", "300-500元", "500元以上", "暂不确定"],
+                            "priority": 1,
+                        }
+                    ],
+                    "report_insights": {
+                        "personas": [
+                            {
+                                "name": "重视仪式感的新婚人群",
+                                "motivation": "纪念婚礼与旅行",
+                                "design_implication": "强调浪漫与长期保存价值",
+                            }
+                        ],
+                        "risk_notes": ["避免悲情爱情典故"],
+                        "trend_summary": {
+                            "data_sources": ["LLM语义推断"],
+                            "suggestion": "未接入实时趋势数据",
+                        },
+                    },
+                },
+            )
+        )
+        service = DemandAnalysisService(
+            storage_dir=self.storage_dir,
+            analyzer=LLMAnalyzer(fake_client),
+        )
+
+        task = service.create_task("为 3 月西湖春游的新婚人群设计一套丝绸伴手礼。")
+        report = service.get_report(task.demand_task_id)["report_json"]
+
+        self.assertEqual(fake_client.calls, 1)
+        self.assertEqual(task.analysis_mode, "llm_enhanced")
+        self.assertEqual(task.llm_status, "success")
+        self.assertEqual(task.llm_model, "deepseek-test")
+        self.assertEqual(task.intent["primary"], "新品设计")
+        self.assertEqual(task.fields["target_users"].source, FieldSource.EXPLICIT)
+        self.assertEqual(task.questions[0].field, "budget_range")
+        self.assertEqual(report["analysis_mode"], "llm_enhanced")
+        self.assertEqual(report["risk_notes"], ["避免悲情爱情典故"])
+        self.assertEqual(report["trend_summary"]["data_sources"], ["LLM语义推断"])
+
+    def test_llm_failure_falls_back_to_rules(self):
+        fake_client = FakeLLMClient(
+            LLMClientResult(
+                status="failed",
+                model="deepseek-test",
+                error="timeout",
+            )
+        )
+        service = DemandAnalysisService(
+            storage_dir=self.storage_dir,
+            analyzer=LLMAnalyzer(fake_client),
+        )
+
+        task = service.create_task("为 3 月西湖春游的新婚人群设计一套丝绸伴手礼。")
+        report = service.get_report(task.demand_task_id)["report_json"]
+
+        self.assertEqual(task.analysis_mode, "rules_fallback")
+        self.assertEqual(task.llm_status, "failed")
+        self.assertEqual(task.llm_error, "timeout")
+        self.assertIn("target_users", task.fields)
+        self.assertEqual(report["analysis_mode"], "rules_fallback")
+        self.assertEqual(report["llm_status"], "failed")
+
+    def test_disabled_llm_does_not_require_api_key(self):
+        task = self.service.create_task("帮我做一个文创礼品。")
+        report = self.service.get_report(task.demand_task_id)["report_json"]
+
+        self.assertEqual(task.analysis_mode, "rules_fallback")
+        self.assertEqual(task.llm_status, "disabled")
+        self.assertEqual(report["llm_status"], "disabled")
+
+    def test_llm_output_is_sanitized_and_limited(self):
+        fake_client = FakeLLMClient(
+            LLMClientResult(
+                status="success",
+                model="deepseek-test",
+                content={
+                    "intent": {"primary": "新品设计", "secondary": [], "confidence": 2},
+                    "fields": {
+                        "unknown_field": {"value": "测试", "source": "explicit", "confidence": 1},
+                        "budget_range": {"value": "300-500元", "source": "wrong", "confidence": -1},
+                    },
+                    "questions": [
+                        {"field": "budget_range", "question": "预算？", "options": ["300-500元"], "priority": 1},
+                        {"field": "target_users", "question": "人群？", "options": ["新婚人群"], "priority": 2},
+                        {"field": "usage_scenarios", "question": "场景？", "options": ["婚礼回礼"], "priority": 3},
+                        {"field": "product_categories", "question": "品类？", "options": ["丝巾"], "priority": 4},
+                        {"field": "unknown_field", "question": "未知？", "options": ["A"], "priority": 0},
+                    ],
+                },
+            )
+        )
+        service = DemandAnalysisService(
+            storage_dir=self.storage_dir,
+            analyzer=LLMAnalyzer(fake_client),
+        )
+
+        task = service.create_task("做一个文创礼品。")
+
+        self.assertIn("unknown_field", task.extra_fields)
+        self.assertEqual(task.fields["budget_range"].source, FieldSource.INFERRED)
+        self.assertEqual(task.fields["budget_range"].confidence, 0.0)
+        self.assertEqual(len(task.questions), 3)
+        self.assertNotIn("unknown_field", [question.field for question in task.questions])
+
+    def test_design_requirement_primary_intent_is_new_product_design(self):
+        intent = parse_intent("为 3 月西湖春游的新婚人群设计一套丝绸伴手礼。")
+
+        self.assertEqual(intent["primary"], "新品设计")
+
+    def test_deepseek_client_reads_local_dotenv(self):
+        env_path = self.storage_dir / ".env"
+        env_path.write_text(
+            "\n".join(
+                [
+                    "DEMAND_LLM_ENABLED=true",
+                    "DEEPSEEK_API_KEY=test-key",
+                    "DEMAND_LLM_BASE_URL=https://example.test",
+                    "DEMAND_LLM_MODEL=deepseek-test",
+                    "DEMAND_LLM_TIMEOUT_SECONDS=7",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        old_cwd = Path.cwd()
+        try:
+            import os
+
+            os.chdir(self.storage_dir)
+            client = DeepSeekClient.from_env()
+        finally:
+            os.chdir(old_cwd)
+
+        self.assertTrue(client.enabled)
+        self.assertEqual(client.api_key, "test-key")
+        self.assertEqual(client.base_url, "https://example.test")
+        self.assertEqual(client.model, "deepseek-test")
+        self.assertEqual(client.timeout_seconds, 7)
 
 
 if __name__ == "__main__":
