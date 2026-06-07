@@ -159,6 +159,10 @@ class DemandAnalysisService:
             self._generate_report(task)
         clarification_status = task.status.value
         packages = [self._build_handoff_package(task, agent, clarification_status) for agent in target_agents]
+        for package in packages:
+            package["brief_files"] = self.storage.handoff_files(task.demand_task_id, package["agent"])
+            package["brief_markdown"] = self._handoff_markdown(package)
+        self.storage.save_handoff_files(task.demand_task_id, packages)
         task.status = TaskStatus.HANDOFF
         task.record("handoff_generated", {"target_agents": target_agents})
         task.touch()
@@ -374,6 +378,10 @@ class DemandAnalysisService:
             "clarification_status": clarification_status or task.status.value,
             "pending_questions": [question.to_dict() for question in task.questions],
             "handoff_warnings": self._handoff_warnings(task),
+            "execution_brief": self._handoff_execution_brief(agent, fields, report),
+            "success_criteria": self._handoff_success_criteria(agent),
+            "field_sources": self._handoff_field_sources(task),
+            "assumptions": self._handoff_assumptions(task, functional_requirements),
             "context": {
                 "original_requirement": task.user_input,
                 "project_summary": report.get("project_summary") or self._project_summary(fields),
@@ -398,6 +406,16 @@ class DemandAnalysisService:
                         "style": style,
                         "budget_range": fields.get("budget_range", DEFAULT_BUDGET),
                     },
+                    "creative_brief": {
+                        "core_theme": self._handoff_core_theme(fields, usage_scenarios),
+                        "cultural_directions": cultural_keywords,
+                        "emotional_tone": emotional_keywords + style,
+                        "avoid_directions": self._handoff_risk_hints(report),
+                        "symbol_translation": [
+                            "将文化关键词转译为可用于纹样、故事和包装的符号体系",
+                            "优先选择喜庆、成双、春日和江南意象",
+                        ],
+                    },
                     "expected_outputs": ["故事内核", "符号体系", "文化依据", "禁忌风险", "设计转译建议"],
                 }
             )
@@ -415,6 +433,14 @@ class DemandAnalysisService:
                         "budget_range": fields.get("budget_range", DEFAULT_BUDGET),
                         "channels": channels,
                     },
+                    "design_brief": {
+                        "product_positioning": self._handoff_product_positioning(fields),
+                        "materials": clean_handoff_values(fields.get("materials", [])),
+                        "visual_elements": unique_values(cultural_keywords + emotional_keywords + style),
+                        "functional_requirements": functional_requirements,
+                        "deliverable_detail": ["纹样方向", "配色方案", "包装结构", "产品效果图"],
+                        "craft_constraints": report.get("constraints", {}).get("production", {}),
+                    },
                     "expected_outputs": ["纹样方案", "配色方案", "包装草图", "产品效果图"],
                 }
             )
@@ -429,6 +455,13 @@ class DemandAnalysisService:
                         "usage_scenarios": usage_scenarios,
                     },
                     "constraints": {"tone": style},
+                    "marketing_brief": {
+                        "selling_points": self._handoff_selling_points(fields, report, cultural_keywords, emotional_keywords),
+                        "channels": channels,
+                        "content_angles": self._handoff_content_angles(usage_scenarios, cultural_keywords, emotional_keywords),
+                        "copy_tone": unique_values(style + emotional_keywords),
+                        "channel_focus": self._handoff_channel_focus(channels),
+                    },
                     "expected_outputs": ["社媒文案", "详情页卖点", "短视频脚本方向"],
                 }
             )
@@ -521,6 +554,114 @@ class DemandAnalysisService:
         if task.status == TaskStatus.NEED_CLARIFICATION or task.questions:
             return ["仍有待确认问题，下游产出需按假设处理"]
         return []
+
+    def _handoff_execution_brief(self, agent: str, fields: dict, report: dict) -> str:
+        summary = report.get("project_summary") or self._project_summary(fields)
+        if agent == "cultural_ip_agent":
+            return f"围绕“{summary}”生成可支撑后续视觉和营销的文化IP方向，优先保证文化依据、喜庆语义和禁忌风险清晰。"
+        if agent == "designer_agent":
+            return f"围绕“{summary}”生成可落地的文化产品视觉方案，优先保证材质、功能、预算和渠道展示一致。"
+        if agent == "marketer_agent":
+            return f"围绕“{summary}”生成面向目标渠道的营销素材方向，优先保证卖点清楚、语气一致和场景可传播。"
+        return f"围绕“{summary}”完成通用下游任务交接。"
+
+    def _handoff_success_criteria(self, agent: str) -> list[str]:
+        if agent == "cultural_ip_agent":
+            return ["故事内核能解释文化关键词", "符号体系可被设计转译", "明确禁忌风险和规避建议"]
+        if agent == "designer_agent":
+            return ["视觉方案匹配目标人群和风格", "产品功能要求可落地", "输出覆盖纹样、配色、包装和效果图方向"]
+        if agent == "marketer_agent":
+            return ["卖点能对应目标人群和使用场景", "内容角度适配目标渠道", "文案语气与审美风格一致"]
+        return ["输出内容与源需求一致", "明确输入、约束和交付物"]
+
+    def _handoff_field_sources(self, task: DemandTask) -> dict[str, str]:
+        return {name: field.source.value for name, field in task.fields.items()}
+
+    def _handoff_assumptions(self, task: DemandTask, functional_requirements: list[str]) -> dict[str, Any]:
+        assumptions = {}
+        if task.report:
+            assumptions.update(task.report.structured_json.get("assumptions", {}))
+        if "functional_requirements" not in task.fields:
+            assumptions["functional_requirements"] = functional_requirements
+        return assumptions
+
+    def _handoff_core_theme(self, fields: dict, usage_scenarios: list[str]) -> str:
+        user = first(clean_handoff_values(fields.get("target_users", [])), "目标人群")
+        location = first(clean_handoff_values(fields.get("location", [])), "")
+        scenario = first(usage_scenarios, "礼赠场景")
+        return "".join(part for part in [location, scenario, user, "祝福"] if part)
+
+    def _handoff_product_positioning(self, fields: dict) -> str:
+        category = first(clean_handoff_values(fields.get("product_categories", [])), "文化产品")
+        budget = fields.get("budget_range", DEFAULT_BUDGET)
+        return f"{budget}价位的{category}"
+
+    def _handoff_content_angles(
+        self,
+        usage_scenarios: list[str],
+        cultural_keywords: list[str],
+        emotional_keywords: list[str],
+    ) -> list[str]:
+        angles = []
+        for scenario in usage_scenarios:
+            angles.append(f"{scenario}内容角度")
+        angles.extend(f"{keyword}文化记忆点" for keyword in cultural_keywords[:3])
+        angles.extend(f"{keyword}情绪卖点" for keyword in emotional_keywords[:3])
+        return unique_values(clean_handoff_values(angles))
+
+    def _handoff_channel_focus(self, channels: list[str]) -> dict[str, list[str]]:
+        focus = {}
+        for channel in channels:
+            if "小红书" in channel:
+                focus[channel] = ["种草标题", "场景化图片", "礼赠理由"]
+            elif "线下" in channel or "文旅" in channel:
+                focus[channel] = ["陈列卖点", "包装识别", "导购话术"]
+            else:
+                focus[channel] = ["核心卖点", "转化文案", "渠道适配素材"]
+        return focus
+
+    def _handoff_markdown(self, package: dict) -> str:
+        lines = [
+            f"# {package.get('agent', 'agent')} 任务 Brief",
+            "",
+            f"## 任务目标",
+            package.get("execution_brief", ""),
+            "",
+            "## 原始需求",
+            package.get("context", {}).get("original_requirement", ""),
+            "",
+            "## 输入信息",
+            "```json",
+            json.dumps(package.get("inputs", {}), ensure_ascii=False, indent=2),
+            "```",
+            "",
+            "## 约束",
+            "```json",
+            json.dumps(package.get("constraints", {}), ensure_ascii=False, indent=2),
+            "```",
+            "",
+            "## 验收标准",
+        ]
+        lines.extend(f"- {item}" for item in package.get("success_criteria", []))
+        lines.extend(["", "## 待确认问题"])
+        pending = package.get("pending_questions", [])
+        if pending:
+            lines.extend(f"- {item.get('question', '')}" for item in pending)
+        else:
+            lines.append("- 暂无。")
+        lines.extend(["", "## 字段来源", "```json"])
+        lines.append(json.dumps(package.get("field_sources", {}), ensure_ascii=False, indent=2))
+        lines.extend(["```", "", "## 系统假设", "```json"])
+        lines.append(json.dumps(package.get("assumptions", {}), ensure_ascii=False, indent=2))
+        lines.extend(["```", "", "## 专属 Brief", "```json"])
+        dedicated = {
+            key: package[key]
+            for key in ("creative_brief", "design_brief", "marketing_brief")
+            if key in package
+        }
+        lines.append(json.dumps(dedicated, ensure_ascii=False, indent=2))
+        lines.append("```")
+        return "\n".join(lines)
 
     def _risk_questions(self, task: DemandTask) -> list[ClarifyingQuestion]:
         questions: list[ClarifyingQuestion] = []

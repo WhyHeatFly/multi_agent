@@ -14,9 +14,11 @@ class DemandStorage:
     def __init__(self, base_dir: str | Path = "outputs") -> None:
         self.base_dir = Path(base_dir)
         self.report_dir = self.base_dir / "demand_reports"
+        self.handoff_dir = self.base_dir / "handoff_packages"
         self.db_path = self.base_dir / "demand_agent.sqlite3"
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.report_dir.mkdir(parents=True, exist_ok=True)
+        self.handoff_dir.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
     def save_task(self, task: DemandTask) -> None:
@@ -95,6 +97,27 @@ class DemandStorage:
         markdown_path = self.report_dir / f"{report_id}.md"
         json_path = self.report_dir / f"{report_id}.json"
         return {"json_path": str(json_path), "markdown_path": str(markdown_path)}
+
+    def save_handoff_files(self, demand_task_id: str, packages: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+        paths: dict[str, dict[str, str]] = {}
+        for package in packages:
+            agent = str(package.get("agent", "agent"))
+            files = self.handoff_files(demand_task_id, agent)
+            json_path = Path(files["json_path"])
+            markdown_path = Path(files["markdown_path"])
+            json_path.parent.mkdir(parents=True, exist_ok=True)
+            json_path.write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding="utf-8")
+            markdown_path.write_text(str(package.get("brief_markdown", "")), encoding="utf-8")
+            paths[agent] = files
+        return paths
+
+    def handoff_files(self, demand_task_id: str, agent: str) -> dict[str, str]:
+        safe_agent = "".join(char if char.isalnum() or char in {"_", "-"} else "_" for char in agent)
+        package_dir = self.handoff_dir / demand_task_id
+        return {
+            "json_path": str(package_dir / f"{safe_agent}.json"),
+            "markdown_path": str(package_dir / f"{safe_agent}.md"),
+        }
 
     def load_task(self, demand_task_id: str) -> DemandTask | None:
         with self._connection() as conn:

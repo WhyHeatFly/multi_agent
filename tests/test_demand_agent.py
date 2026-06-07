@@ -315,6 +315,74 @@ class DemandAnalysisServiceTest(unittest.TestCase):
             self.assertTrue(package["pending_questions"])
             self.assertEqual(package["handoff_warnings"], ["仍有待确认问题，下游产出需按假设处理"])
 
+    def test_handoff_packages_include_executable_brief_sections(self):
+        task = self.service.create_task(
+            "为 3 月西湖春游的新婚人群设计一套丝绸伴手礼。",
+            {"target_channel": ["小红书", "线下文旅店"]},
+        )
+
+        result = self.service.handoff(
+            task.demand_task_id,
+            ["cultural_ip_agent", "designer_agent", "marketer_agent"],
+        )
+
+        for package in result["task_packages"]:
+            self.assertIn("execution_brief", package)
+            self.assertIn("success_criteria", package)
+            self.assertIn("field_sources", package)
+            self.assertIn("assumptions", package)
+            self.assertIn("brief_markdown", package)
+            self.assertIn("brief_files", package)
+            self.assertIn("任务目标", package["brief_markdown"])
+            self.assertIn("验收标准", package["brief_markdown"])
+
+    def test_handoff_agent_specific_briefs_are_distinct(self):
+        task = self.service.create_task("为 3 月西湖春游的新婚人群设计一套丝绸伴手礼。")
+
+        result = self.service.handoff(
+            task.demand_task_id,
+            ["cultural_ip_agent", "designer_agent", "marketer_agent"],
+        )
+        packages = {package["agent"]: package for package in result["task_packages"]}
+
+        self.assertIn("creative_brief", packages["cultural_ip_agent"])
+        self.assertNotIn("design_brief", packages["cultural_ip_agent"])
+        self.assertIn("design_brief", packages["designer_agent"])
+        self.assertNotIn("marketing_brief", packages["designer_agent"])
+        self.assertIn("marketing_brief", packages["marketer_agent"])
+        self.assertNotIn("creative_brief", packages["marketer_agent"])
+
+    def test_handoff_brief_files_are_persisted(self):
+        task = self.service.create_task("为 3 月西湖春游的新婚人群设计一套丝绸伴手礼。")
+
+        result = self.service.handoff(task.demand_task_id, ["designer_agent"])
+        package = result["task_packages"][0]
+        json_path = Path(package["brief_files"]["json_path"])
+        markdown_path = Path(package["brief_files"]["markdown_path"])
+
+        self.assertTrue(json_path.exists())
+        self.assertTrue(markdown_path.exists())
+        saved_json = json.loads(json_path.read_text(encoding="utf-8"))
+        saved_markdown = markdown_path.read_text(encoding="utf-8")
+        self.assertEqual(saved_json["agent"], "designer_agent")
+        self.assertIn(task.user_input, saved_markdown)
+        self.assertIn("任务目标", saved_markdown)
+        self.assertIn("验收标准", saved_markdown)
+        self.assertIn("待确认问题", saved_markdown)
+
+    def test_handoff_field_sources_and_default_assumptions_are_exposed(self):
+        task = self.service.create_task(
+            "为新婚人群设计一套丝绸伴手礼。",
+            {"target_channel": ["小红书"]},
+        )
+
+        result = self.service.handoff(task.demand_task_id, ["designer_agent"])
+        package = result["task_packages"][0]
+
+        self.assertEqual(package["field_sources"]["target_users"], FieldSource.EXPLICIT.value)
+        self.assertEqual(package["field_sources"]["channel_suggestions"], FieldSource.CONTEXT.value)
+        self.assertEqual(package["assumptions"]["functional_requirements"], package["inputs"]["functional_requirements"])
+
     def test_report_is_persisted_to_sqlite_and_output_files(self):
         task = self.service.create_task(
             "为 3 月西湖春游的新婚人群设计一套丝绸伴手礼。",
