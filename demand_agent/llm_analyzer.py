@@ -512,7 +512,7 @@ class LLMAnalyzer:
         if isinstance(value.get("constraints"), dict):
             cleaned["constraints"] = value["constraints"]
         if isinstance(value.get("risk_notes"), list):
-            cleaned["risk_notes"] = [str(item) for item in value["risk_notes"] if item]
+            cleaned["risk_notes"] = [clean_risk_note(item) for item in value["risk_notes"] if item]
         if isinstance(value.get("trend_summary"), dict):
             cleaned["trend_summary"] = value["trend_summary"]
         return cleaned
@@ -573,6 +573,16 @@ def clean_scenarios(value: Any) -> list[dict[str, Any]]:
                 }
             )
     return scenarios
+
+
+def clean_risk_note(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): value[key]
+            for key in ("risk", "severity", "mitigation")
+            if key in value and value[key] not in (None, "")
+        }
+    return str(value)
 
 
 def issue(path: str, code: str, message: str, severity: str = "error") -> dict[str, Any]:

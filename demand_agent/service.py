@@ -7,7 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 from .llm_analyzer import LLMAnalyzer
-from .models import DemandReport, DemandTask, FieldSource, TaskStatus
+from .models import ClarifyingQuestion, DemandReport, DemandTask, FieldSource, TaskStatus
 from .rules import (
     DEFAULT_BUDGET,
     DEFAULT_CHANNELS,
@@ -17,6 +17,10 @@ from .rules import (
     extract_fields,
 )
 from .storage import DemandStorage
+
+
+RISK_CONFIRMATION_KEYWORDS = ("需进一步明确", "建议追问", "定义模糊", "待确认", "需明确", "不明确")
+RISK_QUESTION_FIELDS = {"functional_requirements", "risk_clarifications"}
 
 
 class DemandAnalysisService:
@@ -200,10 +204,16 @@ class DemandAnalysisService:
         score = completeness_score(task.fields)
         if not preserve_questions:
             task.questions = build_questions(task.fields)
+        else:
+            task.questions = self._merge_risk_questions(task.questions, self._risk_questions(task))
         has_assumption = any(field.source == FieldSource.ASSUMPTION for field in task.fields.values())
+        has_risk_question = any(question.field in RISK_QUESTION_FIELDS for question in task.questions)
         if score < 60 and task.questions:
             task.status = TaskStatus.NEED_CLARIFICATION
             task.report = None
+        elif has_risk_question:
+            task.status = TaskStatus.NEED_CLARIFICATION
+            self._generate_report(task)
         elif 60 <= score < 80 and has_assumption:
             task.status = TaskStatus.ASSUMPTION_MODE
             self._generate_report(task)
@@ -328,7 +338,7 @@ class DemandAnalysisService:
         lines.extend(["", "## 6. 风险提示"])
         if report["risk_notes"]:
             for note in report["risk_notes"]:
-                lines.append(f"- {note}")
+                lines.append(f"- {format_risk_note(note)}")
         else:
             lines.append("- 暂无。")
         lines.extend(["", "## 7. 约束与假设"])
@@ -410,6 +420,41 @@ class DemandAnalysisService:
                 }
             )
         return base
+
+    def _risk_questions(self, task: DemandTask) -> list[ClarifyingQuestion]:
+        questions: list[ClarifyingQuestion] = []
+        risk_notes = task.report_insights.get("risk_notes") if isinstance(task.report_insights, dict) else None
+        if not isinstance(risk_notes, list):
+            return questions
+
+        for note in risk_notes:
+            if not is_confirmable_risk(note):
+                continue
+            field_name = risk_question_field(note)
+            current = task.fields.get(field_name)
+            if current and current.source in {FieldSource.USER_CONFIRMED, FieldSource.CONTEXT}:
+                continue
+            questions.append(risk_question_for(note, field_name))
+            if len(questions) == 3:
+                break
+        return questions
+
+    def _merge_risk_questions(
+        self,
+        current_questions: list[ClarifyingQuestion],
+        risk_questions: list[ClarifyingQuestion],
+    ) -> list[ClarifyingQuestion]:
+        merged: list[ClarifyingQuestion] = []
+        seen: set[str] = set()
+        for question in current_questions + risk_questions:
+            key = question.field
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(question)
+            if len(merged) == 3:
+                break
+        return merged
 
     def _followup_analysis_input(self, message: str, answers: dict[str, Any]) -> str:
         parts = []
@@ -564,6 +609,8 @@ class DemandAnalysisService:
 
     def _next_action(self, task: DemandTask) -> str:
         score = completeness_score(task.fields)
+        if any(question.field in RISK_QUESTION_FIELDS for question in task.questions):
+            return "先确认风险问题后再进入下游交接"
         if score < 60:
             return "继续澄清关键缺失信息"
         if score < 80:
@@ -579,6 +626,61 @@ def first(value, default=None):
 
 def stable_json(value) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def is_confirmable_risk(note: Any) -> bool:
+    text = risk_text(note)
+    if isinstance(note, dict):
+        severity = str(note.get("severity", "")).lower()
+        if severity in {"medium", "high"}:
+            return True
+    return any(keyword in text for keyword in RISK_CONFIRMATION_KEYWORDS)
+
+
+def risk_question_field(note: Any) -> str:
+    text = risk_text(note)
+    if "实用" in text or "功能" in text or "便携" in text or "多功能" in text:
+        return "functional_requirements"
+    return "risk_clarifications"
+
+
+def risk_question_for(note: Any, field_name: str) -> ClarifyingQuestion:
+    text = risk_text(note)
+    if field_name == "functional_requirements":
+        return ClarifyingQuestion(
+            field=field_name,
+            question="你希望这套伴手礼的实用性主要体现在哪些方面？",
+            options=["日常佩戴/使用", "便携易带", "多功能组合", "收藏纪念"],
+        )
+    return ClarifyingQuestion(
+        field=field_name,
+        question=f"关于“{short_text(text)}”，你希望优先按哪种方式处理？",
+        options=["进一步明确需求", "按系统建议处理", "暂不处理"],
+    )
+
+
+def risk_text(note: Any) -> str:
+    if isinstance(note, dict):
+        parts = [note.get("risk"), note.get("mitigation"), note.get("severity")]
+        return "；".join(str(part) for part in parts if part)
+    return str(note)
+
+
+def format_risk_note(note: Any) -> str:
+    if not isinstance(note, dict):
+        return str(note)
+    parts = []
+    if note.get("risk"):
+        parts.append(f"风险：{note['risk']}")
+    if note.get("severity"):
+        parts.append(f"等级：{note['severity']}")
+    if note.get("mitigation"):
+        parts.append(f"建议：{note['mitigation']}")
+    return "；".join(parts) if parts else str(note)
+
+
+def short_text(text: str, limit: int = 24) -> str:
+    return text if len(text) <= limit else f"{text[:limit]}..."
 
 
 def scenario_goal(scenario: str) -> str:

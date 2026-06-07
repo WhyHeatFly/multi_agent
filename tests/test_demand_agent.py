@@ -69,6 +69,30 @@ def minimal_report_insights():
     }
 
 
+def risk_report_insights():
+    insights = minimal_report_insights()
+    insights["risk_notes"] = [
+        {
+            "risk": "实用性定义模糊，需进一步明确具体方向（如日常使用、便携、多功能）",
+            "severity": "medium",
+            "mitigation": "建议通过追问或用户反馈细化实用性要求",
+        }
+    ]
+    return insights
+
+
+def complete_llm_fields():
+    return {
+        "target_users": {"value": ["新婚人群"], "source": "explicit", "confidence": 0.95},
+        "usage_scenarios": {"value": ["西湖春游"], "source": "explicit", "confidence": 0.95},
+        "product_categories": {"value": ["丝绸伴手礼"], "source": "explicit", "confidence": 0.95},
+        "budget_range": {"value": "300-500元", "source": "explicit", "confidence": 0.95},
+        "aesthetic_preferences": {"value": ["中式喜庆"], "source": "explicit", "confidence": 0.95},
+        "cultural_preferences": {"value": ["西湖", "丝绸"], "source": "explicit", "confidence": 0.95},
+        "channel_suggestions": {"value": ["线下文旅店"], "source": "explicit", "confidence": 0.95},
+    }
+
+
 class FakeHandler(DemandAgentHandler):
     def __init__(self, path="/", payload=None):
         self.wfile = BytesIO()
@@ -605,6 +629,99 @@ class DemandAnalysisServiceTest(unittest.TestCase):
         self.assertEqual(task.fields["budget_range"].field_value, "300元以内")
         self.assertEqual(task.analysis_mode, "llm_enhanced")
         self.assertEqual(result["report_id"], task.report.report_id)
+
+    def test_llm_structured_risk_generates_clarifying_question_even_with_full_score(self):
+        fake_client = FakeLLMClient(
+            LLMClientResult(
+                status="success",
+                model="deepseek-test",
+                content={
+                    "intent": {"primary": "新品设计", "secondary": ["礼品定制"], "confidence": 0.95},
+                    "fields": complete_llm_fields(),
+                    "questions": [],
+                    "report_insights": risk_report_insights(),
+                },
+            )
+        )
+        service = DemandAnalysisService(
+            storage_dir=self.storage_dir,
+            analyzer=LLMAnalyzer(fake_client),
+        )
+
+        task = service.create_task("为 3 月西湖春游的新婚人群设计一套丝绸伴手礼，要求实用。")
+        report = service.get_report(task.demand_task_id)
+
+        self.assertEqual(task.status, TaskStatus.NEED_CLARIFICATION)
+        self.assertEqual(report["completeness_score"], 100)
+        self.assertEqual(task.questions[0].field, "functional_requirements")
+        self.assertIn("实用性主要体现在哪些方面", task.questions[0].question)
+        self.assertEqual(report["report_json"]["recommended_action"], "先确认风险问题后再进入下游交接")
+        self.assertIn("pending_questions", report["report_json"])
+
+    def test_answering_risk_question_confirms_field_and_refreshes_report(self):
+        fake_client = SequenceFakeLLMClient(
+            [
+                LLMClientResult(
+                    status="success",
+                    model="deepseek-test",
+                    content={
+                        "intent": {"primary": "新品设计", "secondary": ["礼品定制"], "confidence": 0.95},
+                        "fields": complete_llm_fields(),
+                        "questions": [],
+                        "report_insights": risk_report_insights(),
+                    },
+                ),
+                LLMClientResult(
+                    status="success",
+                    model="deepseek-test",
+                    content={
+                        "intent": {"primary": "新品设计", "secondary": ["礼品定制"], "confidence": 0.95},
+                        "fields": {},
+                        "questions": [],
+                        "report_insights": risk_report_insights(),
+                    },
+                ),
+            ]
+        )
+        service = DemandAnalysisService(
+            storage_dir=self.storage_dir,
+            analyzer=LLMAnalyzer(fake_client),
+        )
+        task = service.create_task("为 3 月西湖春游的新婚人群设计一套丝绸伴手礼，要求实用。")
+
+        result = service.submit_answers(task.demand_task_id, {"functional_requirements": "日常佩戴/使用、便携易带"})
+        report = service.get_report(task.demand_task_id)["report_json"]
+
+        self.assertEqual(task.fields["functional_requirements"].source, FieldSource.USER_CONFIRMED)
+        self.assertEqual(task.status, TaskStatus.REPORT_READY)
+        self.assertNotIn("functional_requirements", [question["field"] for question in result["questions"]])
+        self.assertEqual(report["latest_followup"]["answers"], {"functional_requirements": "日常佩戴/使用、便携易带"})
+
+    def test_structured_risk_markdown_is_rendered_without_python_dict_string(self):
+        fake_client = FakeLLMClient(
+            LLMClientResult(
+                status="success",
+                model="deepseek-test",
+                content={
+                    "intent": {"primary": "新品设计", "secondary": ["礼品定制"], "confidence": 0.95},
+                    "fields": complete_llm_fields(),
+                    "questions": [],
+                    "report_insights": risk_report_insights(),
+                },
+            )
+        )
+        service = DemandAnalysisService(
+            storage_dir=self.storage_dir,
+            analyzer=LLMAnalyzer(fake_client),
+        )
+
+        task = service.create_task("为 3 月西湖春游的新婚人群设计一套丝绸伴手礼，要求实用。")
+        markdown = service.get_report(task.demand_task_id)["report_markdown"]
+
+        self.assertIn("风险：实用性定义模糊", markdown)
+        self.assertIn("等级：medium", markdown)
+        self.assertIn("建议：建议通过追问", markdown)
+        self.assertNotIn("{'risk'", markdown)
 
     def test_empty_followup_is_rejected(self):
         task = self.service.create_task("帮我做一个文创礼品。")
