@@ -9,7 +9,7 @@ import demand_agent.api as api_module
 from demand_agent.api import DemandAgentHandler
 from demand_agent.llm_analyzer import LLMAnalyzer
 from demand_agent.llm_client import DeepSeekClient, LLMClientResult
-from demand_agent.models import FieldSource, TaskStatus
+from demand_agent.models import DemandField, FieldSource, TaskStatus
 from demand_agent.rules import parse_intent
 
 
@@ -216,6 +216,104 @@ class DemandAnalysisServiceTest(unittest.TestCase):
         self.assertIn("product_categories", designer_inputs)
         self.assertIn("materials", designer_inputs)
         self.assertIn("budget_range", packages["designer_agent"]["constraints"])
+
+    def test_handoff_filters_dirty_keywords_and_keeps_context(self):
+        task = self.service.create_task(
+            "为 3 月西湖春游的新婚人群设计一套丝绸伴手礼。",
+            {"brand": "南浔丝绸文化产业园", "target_channel": ["小红书"]},
+        )
+        task.fields["cultural_preferences"] = DemandField(
+            "cultural_preferences",
+            ["需", "要", "丝绸"],
+            FieldSource.USER_CONFIRMED,
+            0.96,
+        )
+        task.fields["location"] = DemandField("location", ["西湖"], FieldSource.USER_CONFIRMED, 0.96)
+        task.report = None
+
+        result = self.service.handoff(task.demand_task_id, ["cultural_ip_agent", "marketer_agent"])
+        packages = {package["agent"]: package for package in result["task_packages"]}
+        cultural_keywords = packages["cultural_ip_agent"]["inputs"]["cultural_keywords"]
+        selling_points = packages["marketer_agent"]["inputs"]["selling_points"]
+
+        self.assertNotIn("需", cultural_keywords)
+        self.assertNotIn("要", cultural_keywords)
+        self.assertIn("丝绸", cultural_keywords)
+        self.assertIn("西湖", cultural_keywords)
+        self.assertNotIn("需", selling_points)
+        self.assertEqual(packages["cultural_ip_agent"]["context"]["original_requirement"], task.user_input)
+        self.assertEqual(packages["cultural_ip_agent"]["context"]["brand_context"], "南浔丝绸文化产业园")
+
+    def test_handoff_outputs_stable_list_fields(self):
+        task = self.service.create_task("为新婚人群设计浪漫唯美丝绸伴手礼。")
+        task.fields["aesthetic_preferences"] = DemandField(
+            "aesthetic_preferences",
+            "浪漫唯美",
+            FieldSource.USER_CONFIRMED,
+            0.96,
+        )
+        task.fields["channel_suggestions"] = DemandField(
+            "channel_suggestions",
+            "小红书",
+            FieldSource.USER_CONFIRMED,
+            0.96,
+        )
+        task.report = None
+
+        result = self.service.handoff(task.demand_task_id, ["designer_agent", "marketer_agent"])
+        packages = {package["agent"]: package for package in result["task_packages"]}
+
+        self.assertIsInstance(packages["designer_agent"]["inputs"]["style"], list)
+        self.assertEqual(packages["designer_agent"]["inputs"]["style"], ["浪漫唯美"])
+        self.assertIsInstance(packages["designer_agent"]["constraints"]["channels"], list)
+        self.assertEqual(packages["designer_agent"]["constraints"]["channels"], ["小红书"])
+        self.assertIsInstance(packages["marketer_agent"]["constraints"]["tone"], list)
+        self.assertIsInstance(packages["marketer_agent"]["inputs"]["usage_scenarios"], list)
+
+    def test_handoff_uses_confirmed_functional_requirements_for_designer(self):
+        task = self.service.create_task("为新婚人群设计一套丝绸伴手礼。")
+        task.fields["functional_requirements"] = DemandField(
+            "functional_requirements",
+            ["日常佩戴/使用", "便携易带"],
+            FieldSource.USER_CONFIRMED,
+            0.96,
+        )
+        task.report = None
+
+        result = self.service.handoff(task.demand_task_id, ["designer_agent"])
+        designer_inputs = result["task_packages"][0]["inputs"]
+
+        self.assertEqual(designer_inputs["functional_requirements"], ["日常佩戴/使用", "便携易带"])
+        self.assertNotEqual(designer_inputs["functional_requirements"], ["便携", "适合展示", "易保存"])
+
+    def test_handoff_marks_pending_clarification_on_each_package(self):
+        fake_client = FakeLLMClient(
+            LLMClientResult(
+                status="success",
+                model="deepseek-test",
+                content={
+                    "intent": {"primary": "新品设计", "secondary": ["礼品定制"], "confidence": 0.95},
+                    "fields": complete_llm_fields(),
+                    "questions": [],
+                    "report_insights": risk_report_insights(),
+                },
+            )
+        )
+        service = DemandAnalysisService(
+            storage_dir=self.storage_dir,
+            analyzer=LLMAnalyzer(fake_client),
+        )
+        task = service.create_task("为 3 月西湖春游的新婚人群设计一套丝绸伴手礼，要求实用。")
+
+        result = service.handoff(
+            task.demand_task_id,
+            ["cultural_ip_agent", "designer_agent", "marketer_agent"],
+        )
+
+        for package in result["task_packages"]:
+            self.assertEqual(package["clarification_status"], TaskStatus.NEED_CLARIFICATION.value)
+            self.assertTrue(package["pending_questions"])
+            self.assertEqual(package["handoff_warnings"], ["仍有待确认问题，下游产出需按假设处理"])
 
     def test_report_is_persisted_to_sqlite_and_output_files(self):
         task = self.service.create_task(

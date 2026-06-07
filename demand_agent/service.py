@@ -21,6 +21,8 @@ from .storage import DemandStorage
 
 RISK_CONFIRMATION_KEYWORDS = ("需进一步明确", "建议追问", "定义模糊", "待确认", "需明确", "不明确")
 RISK_QUESTION_FIELDS = {"functional_requirements", "risk_clarifications"}
+HANDOFF_STOPWORDS = {"", "需", "要", "的", "和", "及", "与", "或", "了", "在", "对", "为"}
+DEFAULT_FUNCTIONAL_REQUIREMENTS = ["便携", "适合展示", "易保存"]
 
 
 class DemandAnalysisService:
@@ -155,8 +157,9 @@ class DemandAnalysisService:
         task = self.get_task(demand_task_id)
         if task.report is None:
             self._generate_report(task)
+        clarification_status = task.status.value
+        packages = [self._build_handoff_package(task, agent, clarification_status) for agent in target_agents]
         task.status = TaskStatus.HANDOFF
-        packages = [self._build_handoff_package(task, agent) for agent in target_agents]
         task.record("handoff_generated", {"target_agents": target_agents})
         task.touch()
         self._persist(task)
@@ -354,26 +357,45 @@ class DemandAnalysisService:
             lines.append("- 暂无。")
         return "\n".join(lines)
 
-    def _build_handoff_package(self, task: DemandTask, agent: str) -> dict:
+    def _build_handoff_package(self, task: DemandTask, agent: str, clarification_status: str | None = None) -> dict:
         fields = self._field_values(task)
+        report = task.report.structured_json if task.report else {}
+        style = clean_handoff_values(fields.get("aesthetic_preferences", []))
+        channels = clean_handoff_values(fields.get("channel_suggestions", DEFAULT_CHANNELS))
+        target_users = clean_handoff_values(fields.get("target_users", []))
+        usage_scenarios = self._handoff_usage_scenarios(task, fields, report)
+        cultural_keywords = self._handoff_cultural_keywords(fields)
+        emotional_keywords = clean_handoff_values(fields.get("emotional_keywords", []))
+        functional_requirements = self._handoff_functional_requirements(fields, report)
         base = {
             "agent": agent,
             "source_report_id": task.report.report_id if task.report else None,
             "source_report_version": task.version,
+            "clarification_status": clarification_status or task.status.value,
+            "pending_questions": [question.to_dict() for question in task.questions],
+            "handoff_warnings": self._handoff_warnings(task),
+            "context": {
+                "original_requirement": task.user_input,
+                "project_summary": report.get("project_summary") or self._project_summary(fields),
+                "time": clean_handoff_values(fields.get("time", [])),
+                "location": clean_handoff_values(fields.get("location", [])),
+                "brand_context": fields.get("brand_context"),
+                "completeness_score": report.get("completeness_score", completeness_score(task.fields)),
+            },
         }
         if agent == "cultural_ip_agent":
             base.update(
                 {
                     "task": "生成文化IP方向",
                     "inputs": {
-                        "target_users": fields.get("target_users", []),
-                        "usage_scenarios": fields.get("usage_scenarios", []),
-                        "cultural_keywords": fields.get("cultural_preferences", []),
-                        "emotional_keywords": fields.get("emotional_keywords", []),
-                        "risk_hints": ["避免悲情爱情典故", "避免孤独或离别意象"],
+                        "target_users": target_users,
+                        "usage_scenarios": usage_scenarios,
+                        "cultural_keywords": cultural_keywords,
+                        "emotional_keywords": emotional_keywords,
+                        "risk_hints": self._handoff_risk_hints(report),
                     },
                     "constraints": {
-                        "style": fields.get("aesthetic_preferences", []),
+                        "style": style,
                         "budget_range": fields.get("budget_range", DEFAULT_BUDGET),
                     },
                     "expected_outputs": ["故事内核", "符号体系", "文化依据", "禁忌风险", "设计转译建议"],
@@ -384,14 +406,14 @@ class DemandAnalysisService:
                 {
                     "task": "生成文化产品视觉方案",
                     "inputs": {
-                        "product_categories": fields.get("product_categories", []),
-                        "style": fields.get("aesthetic_preferences", []),
-                        "functional_requirements": ["便携", "适合展示", "易保存"],
-                        "materials": fields.get("materials", []),
+                        "product_categories": clean_handoff_values(fields.get("product_categories", [])),
+                        "style": style,
+                        "functional_requirements": functional_requirements,
+                        "materials": clean_handoff_values(fields.get("materials", [])),
                     },
                     "constraints": {
                         "budget_range": fields.get("budget_range", DEFAULT_BUDGET),
-                        "channels": fields.get("channel_suggestions", DEFAULT_CHANNELS),
+                        "channels": channels,
                     },
                     "expected_outputs": ["纹样方案", "配色方案", "包装草图", "产品效果图"],
                 }
@@ -401,12 +423,12 @@ class DemandAnalysisService:
                 {
                     "task": "生成营销素材方向",
                     "inputs": {
-                        "target_users": fields.get("target_users", []),
-                        "channels": fields.get("channel_suggestions", DEFAULT_CHANNELS),
-                        "selling_points": fields.get("emotional_keywords", []) + fields.get("cultural_preferences", []),
-                        "usage_scenarios": fields.get("usage_scenarios", []),
+                        "target_users": target_users,
+                        "channels": channels,
+                        "selling_points": self._handoff_selling_points(fields, report, cultural_keywords, emotional_keywords),
+                        "usage_scenarios": usage_scenarios,
                     },
-                    "constraints": {"tone": fields.get("aesthetic_preferences", [])},
+                    "constraints": {"tone": style},
                     "expected_outputs": ["社媒文案", "详情页卖点", "短视频脚本方向"],
                 }
             )
@@ -420,6 +442,85 @@ class DemandAnalysisService:
                 }
             )
         return base
+
+    def _handoff_usage_scenarios(self, task: DemandTask, fields: dict, report: dict) -> list[str]:
+        scenarios = []
+        for item in report.get("scenario_map", []):
+            if isinstance(item, dict):
+                scenarios.append(item.get("scenario"))
+            else:
+                scenarios.append(item)
+        scenarios.extend(clean_handoff_values(fields.get("usage_scenarios", []), allow_single_char=False))
+        if not scenarios:
+            scenarios.extend(["礼赠场景"])
+        return unique_values(scenarios)
+
+    def _handoff_cultural_keywords(self, fields: dict) -> list[str]:
+        values = []
+        values.extend(clean_handoff_values(fields.get("cultural_preferences", []), allow_single_char=False))
+        values.extend(clean_handoff_values(fields.get("location", []), allow_single_char=False))
+        values.extend(clean_handoff_values(fields.get("materials", []), allow_single_char=False))
+        if any("新婚" in item for item in clean_handoff_values(fields.get("target_users", []))):
+            values.append("婚嫁")
+        if any(item in {"西湖", "杭州", "南浔", "湖州", "江南"} for item in clean_handoff_values(fields.get("location", []))):
+            values.append("江南")
+        return unique_values(values)
+
+    def _handoff_functional_requirements(self, fields: dict, report: dict) -> list[str]:
+        confirmed = clean_handoff_values(fields.get("functional_requirements", []))
+        if confirmed:
+            return confirmed
+
+        requirements = []
+        for scenario in report.get("scenario_map", []):
+            if not isinstance(scenario, dict):
+                continue
+            requirements.extend(clean_handoff_values(scenario.get("product_requirements", [])))
+        if requirements:
+            return unique_values(requirements)
+        return list(DEFAULT_FUNCTIONAL_REQUIREMENTS)
+
+    def _handoff_selling_points(
+        self,
+        fields: dict,
+        report: dict,
+        cultural_keywords: list[str],
+        emotional_keywords: list[str],
+    ) -> list[str]:
+        points = []
+        points.extend(emotional_keywords)
+        points.extend(cultural_keywords)
+        for scenario in self._handoff_usage_scenarios_from_report(report):
+            if "春游" in scenario:
+                points.append("春游纪念")
+            if "婚" in scenario:
+                points.append("新婚祝福")
+        for item in report.get("product_recommendations", {}).get("recommended", []):
+            if isinstance(item, dict):
+                points.append(item.get("category"))
+        if any("丝" in item for item in clean_handoff_values(fields.get("materials", [])) + cultural_keywords):
+            points.append("丝绸质感")
+        return unique_values(clean_handoff_values(points))
+
+    def _handoff_usage_scenarios_from_report(self, report: dict) -> list[str]:
+        scenarios = []
+        for item in report.get("scenario_map", []):
+            if isinstance(item, dict):
+                scenarios.append(item.get("scenario"))
+            else:
+                scenarios.append(item)
+        return clean_handoff_values(scenarios)
+
+    def _handoff_risk_hints(self, report: dict) -> list[str]:
+        hints = ["避免悲情爱情典故", "避免孤独或离别意象"]
+        for note in report.get("risk_notes", []):
+            hints.append(format_risk_note(note))
+        return unique_values(clean_handoff_values(hints))
+
+    def _handoff_warnings(self, task: DemandTask) -> list[str]:
+        if task.status == TaskStatus.NEED_CLARIFICATION or task.questions:
+            return ["仍有待确认问题，下游产出需按假设处理"]
+        return []
 
     def _risk_questions(self, task: DemandTask) -> list[ClarifyingQuestion]:
         questions: list[ClarifyingQuestion] = []
@@ -603,7 +704,8 @@ class DemandAnalysisService:
         return {
             "data_sources": ["内部规则样本"],
             "time_range": "MVP静态规则",
-            "hot_keywords": fields.get("aesthetic_preferences", []) + fields.get("emotional_keywords", []),
+            "hot_keywords": clean_handoff_values(fields.get("aesthetic_preferences", []))
+            + clean_handoff_values(fields.get("emotional_keywords", [])),
             "suggestion": "实时趋势数据暂未接入，当前结论基于需求字段和内置行业规则推断。",
         }
 
@@ -626,6 +728,42 @@ def first(value, default=None):
 
 def stable_json(value) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def as_list(value: Any) -> list[Any]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    return [value]
+
+
+def clean_handoff_values(value: Any, allow_single_char: bool = False) -> list[str]:
+    cleaned = []
+    for item in as_list(value):
+        if isinstance(item, dict):
+            item = item.get("name") or item.get("category") or item.get("scenario") or item.get("value")
+        text = str(item).strip()
+        if not text or text in HANDOFF_STOPWORDS:
+            continue
+        if len(text) == 1 and not allow_single_char:
+            continue
+        cleaned.append(text)
+    return unique_values(cleaned)
+
+
+def unique_values(values: list[Any]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        text = str(value).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
 
 
 def is_confirmable_risk(note: Any) -> bool:
