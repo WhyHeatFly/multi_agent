@@ -153,16 +153,25 @@ class DemandAnalysisService:
             "report_files": self.storage.report_files(task.report.report_id),
         }
 
-    def handoff(self, demand_task_id: str, target_agents: list[str]) -> dict:
+    def handoff(
+        self,
+        demand_task_id: str,
+        target_agents: list[str],
+        include_brief_markdown: bool = False,
+    ) -> dict:
         task = self.get_task(demand_task_id)
         if task.report is None:
             self._generate_report(task)
-        clarification_status = task.status.value
+        clarification_status = TaskStatus.NEED_CLARIFICATION.value if task.questions else task.status.value
         packages = [self._build_handoff_package(task, agent, clarification_status) for agent in target_agents]
         for package in packages:
             package["brief_files"] = self.storage.handoff_files(task.demand_task_id, package["agent"])
             package["brief_markdown"] = self._handoff_markdown(package)
         self.storage.save_handoff_files(task.demand_task_id, packages)
+        response_packages = [
+            self._handoff_response_package(package, include_brief_markdown=include_brief_markdown)
+            for package in packages
+        ]
         task.status = TaskStatus.HANDOFF
         task.record("handoff_generated", {"target_agents": target_agents})
         task.touch()
@@ -170,7 +179,7 @@ class DemandAnalysisService:
         return {
             "demand_task_id": task.demand_task_id,
             "status": task.status.value,
-            "task_packages": packages,
+            "task_packages": response_packages,
         }
 
     def _analyze(self, task: DemandTask) -> None:
@@ -476,6 +485,25 @@ class DemandAnalysisService:
             )
         return base
 
+    def _handoff_response_package(self, package: dict, include_brief_markdown: bool = False) -> dict:
+        keys = [
+            "agent",
+            "source_report_id",
+            "source_report_version",
+            "clarification_status",
+            "handoff_warnings",
+            "task",
+            "execution_brief",
+            "inputs",
+            "constraints",
+            "expected_outputs",
+            "brief_files",
+        ]
+        response = {key: package[key] for key in keys if key in package}
+        if include_brief_markdown and "brief_markdown" in package:
+            response["brief_markdown"] = package["brief_markdown"]
+        return response
+
     def _handoff_usage_scenarios(self, task: DemandTask, fields: dict, report: dict) -> list[str]:
         scenarios = []
         for item in report.get("scenario_map", []):
@@ -589,7 +617,8 @@ class DemandAnalysisService:
         user = first(clean_handoff_values(fields.get("target_users", [])), "目标人群")
         location = first(clean_handoff_values(fields.get("location", [])), "")
         scenario = first(usage_scenarios, "礼赠场景")
-        return "".join(part for part in [location, scenario, user, "祝福"] if part)
+        location_part = "" if location and location in scenario else location
+        return "".join(part for part in [location_part, scenario, user, "祝福"] if part)
 
     def _handoff_product_positioning(self, fields: dict) -> str:
         category = first(clean_handoff_values(fields.get("product_categories", [])), "文化产品")

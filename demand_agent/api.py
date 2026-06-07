@@ -58,7 +58,11 @@ class DemandAgentHandler(BaseHTTPRequestHandler):
                     self._json(result)
                     return
                 if action == "handoff":
-                    result = get_service().handoff(demand_task_id, payload.get("target_agents") or [])
+                    result = get_service().handoff(
+                        demand_task_id,
+                        payload.get("target_agents") or [],
+                        include_brief_markdown=bool(payload.get("include_brief_markdown")),
+                    )
                     self._json(result)
                     return
 

@@ -514,6 +514,68 @@ tr:last-child td {
   font-size: 16px;
 }
 
+.handoff-item .turn-title h3 {
+  margin: 0;
+}
+
+.handoff-item p {
+  margin: 0 0 10px;
+  line-height: 1.6;
+}
+
+.handoff-meta {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.handoff-meta div {
+  display: grid;
+  gap: 4px;
+}
+
+.handoff-meta dt {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.handoff-meta dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.handoff-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.handoff-summary strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+.handoff-warnings {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--warning);
+  line-height: 1.5;
+}
+
+details {
+  margin-top: 10px;
+}
+
+summary {
+  cursor: pointer;
+  color: var(--accent-strong);
+  font-weight: 800;
+}
+
 pre {
   max-height: 280px;
   overflow: auto;
@@ -573,6 +635,10 @@ pre {
   }
 
   .meta-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .handoff-summary {
     grid-template-columns: 1fr;
   }
 }

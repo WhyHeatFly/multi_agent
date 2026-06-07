@@ -303,12 +303,44 @@ function renderHandoff(packages) {
     .map(
       (item) => `
         <section class="handoff-item">
-          <h3>${escapeHtml(item.agent || "agent")}</h3>
-          <pre>${escapeHtml(JSON.stringify(item, null, 2))}</pre>
+          <div class="turn-title">
+            <h3>${escapeHtml(item.agent || "agent")}</h3>
+            ${badge(item.clarification_status || "--", item.clarification_status)}
+          </div>
+          <p>${escapeHtml(item.execution_brief || item.task || "暂无任务目标。")}</p>
+          ${renderWarningList(item.handoff_warnings || [])}
+          <dl class="handoff-meta">
+            <div><dt>Markdown</dt><dd>${escapeHtml(item.brief_files?.markdown_path || "--")}</dd></div>
+            <div><dt>JSON</dt><dd>${escapeHtml(item.brief_files?.json_path || "--")}</dd></div>
+          </dl>
+          <div class="handoff-summary">
+            <div>
+              <strong>输入摘要</strong>
+              <pre>${escapeHtml(JSON.stringify(item.inputs || {}, null, 2))}</pre>
+            </div>
+            <div>
+              <strong>约束摘要</strong>
+              <pre>${escapeHtml(JSON.stringify(item.constraints || {}, null, 2))}</pre>
+            </div>
+          </div>
+          <details>
+            <summary>查看完整 JSON</summary>
+            <pre>${escapeHtml(JSON.stringify(item, null, 2))}</pre>
+          </details>
+          ${
+            item.brief_markdown
+              ? `<details><summary>查看 Markdown Brief</summary><pre>${escapeHtml(item.brief_markdown)}</pre></details>`
+              : ""
+          }
         </section>
       `,
     )
     .join("");
+}
+
+function renderWarningList(warnings) {
+  if (!warnings.length) return "";
+  return `<ul class="handoff-warnings">${warnings.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`;
 }
 
 function markdownToHtml(markdown) {
