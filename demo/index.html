@@ -7,39 +7,89 @@
     <link rel="stylesheet" href="/demo/styles.css" />
   </head>
   <body>
+    <div id="intakeModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="intakeTitle">
+      <section class="intake-modal">
+        <div class="title-group">
+          <p class="eyebrow">Demand Intake</p>
+          <h1 id="intakeTitle">先完成需求信息</h1>
+          <p class="subtitle">提交原始需求、品牌上下文和目标渠道后，系统会自动开始分析。</p>
+        </div>
+
+        <form id="demandForm" class="form-stack">
+          <label>
+            <span>原始需求</span>
+            <textarea id="userInput" rows="6" required>为 3 月西湖春游的新婚人群设计一套丝绸伴手礼。</textarea>
+          </label>
+          <label>
+            <span>品牌上下文</span>
+            <input id="brandInput" value="南浔丝绸文化产业园" required />
+          </label>
+          <label>
+            <span>目标渠道（用顿号、逗号或空格分隔）</span>
+            <input id="channelsInput" value="小红书、线下文旅店" required />
+          </label>
+          <p id="intakeError" class="form-error hidden"></p>
+          <div class="modal-actions">
+            <button id="analyzeButton" type="submit">开始分析</button>
+            <button id="cancelIntakeButton" class="secondary-button hidden" type="button">取消</button>
+          </div>
+        </form>
+      </section>
+    </div>
+
+    <div id="questionsModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="questionsTitle">
+      <section class="intake-modal">
+        <div class="title-group">
+          <p class="eyebrow">Clarification</p>
+          <h1 id="questionsTitle">请先回答追问</h1>
+          <p class="subtitle">这些信息会直接影响报告完整度和下游任务包，请确认后继续。</p>
+        </div>
+
+        <form id="questionsForm" class="form-stack">
+          <div id="modalQuestionsPanel" class="question-list"></div>
+          <p id="questionsError" class="form-error hidden"></p>
+          <button id="submitQuestionsButton" type="submit">提交追问答案</button>
+        </form>
+      </section>
+    </div>
+
     <main class="shell">
       <section class="workspace">
         <aside class="input-panel" aria-label="需求输入">
           <div class="title-group">
             <p class="eyebrow">Demand Analyst Agent</p>
             <h1>需求 Agent 功能展示</h1>
-            <p class="subtitle">输入自然语言需求，查看字段抽取、追问、报告和下游任务包。</p>
+            <p class="subtitle">需求信息从弹窗提交后锁定，左侧用于查看上下文、自由补充需求和生成交接包。</p>
           </div>
 
-          <form id="demandForm" class="form-stack">
-            <label>
-              <span>原始需求</span>
-              <textarea id="userInput" rows="6">为 3 月西湖春游的新婚人群设计一套丝绸伴手礼。</textarea>
-            </label>
-            <label>
-              <span>品牌上下文</span>
-              <input id="brandInput" value="南浔丝绸文化产业园" />
-            </label>
-            <label>
-              <span>目标渠道（用顿号、逗号或空格分隔）</span>
-              <input id="channelsInput" value="小红书、线下文旅店" />
-            </label>
-            <button id="analyzeButton" type="submit">分析需求</button>
-          </form>
-
-          <section class="section-block" aria-label="追问回答">
+          <section class="context-card" aria-label="当前需求信息">
             <div class="section-heading">
-              <h2>追问回答</h2>
+              <h2>当前需求</h2>
+              <button id="editIntakeButton" class="secondary-button compact-button" type="button" disabled>重填</button>
+            </div>
+            <dl>
+              <div>
+                <dt>原始需求</dt>
+                <dd id="currentDemand">等待提交</dd>
+              </div>
+              <div>
+                <dt>品牌上下文</dt>
+                <dd id="currentBrand">等待提交</dd>
+              </div>
+              <div>
+                <dt>目标渠道</dt>
+                <dd id="currentChannels">等待提交</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section class="section-block" aria-label="自由补充需求">
+            <div class="section-heading">
+              <h2>自由补充需求</h2>
               <span id="questionCount" class="counter">0</span>
             </div>
-            <div id="questionsPanel" class="question-list empty">分析后会在这里显示待确认问题。</div>
             <label>
-              <span>自由补充需求</span>
+              <span>补充说明</span>
               <textarea
                 id="followupInput"
                 rows="4"

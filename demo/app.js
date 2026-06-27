@@ -2,23 +2,37 @@ const state = {
   taskId: null,
   report: null,
   questions: [],
+  intakeSubmitted: false,
+  isEditingIntake: false,
+  activeModal: "intake",
 };
 
 const elements = {
   form: document.querySelector("#demandForm"),
+  questionsForm: document.querySelector("#questionsForm"),
   analyzeButton: document.querySelector("#analyzeButton"),
+  cancelIntakeButton: document.querySelector("#cancelIntakeButton"),
+  editIntakeButton: document.querySelector("#editIntakeButton"),
   submitAnswersButton: document.querySelector("#submitAnswersButton"),
+  submitQuestionsButton: document.querySelector("#submitQuestionsButton"),
   handoffButton: document.querySelector("#handoffButton"),
+  intakeModal: document.querySelector("#intakeModal"),
+  questionsModal: document.querySelector("#questionsModal"),
+  intakeError: document.querySelector("#intakeError"),
+  questionsError: document.querySelector("#questionsError"),
   userInput: document.querySelector("#userInput"),
   brandInput: document.querySelector("#brandInput"),
   channelsInput: document.querySelector("#channelsInput"),
   followupInput: document.querySelector("#followupInput"),
   notice: document.querySelector("#notice"),
+  currentDemand: document.querySelector("#currentDemand"),
+  currentBrand: document.querySelector("#currentBrand"),
+  currentChannels: document.querySelector("#currentChannels"),
   projectTitle: document.querySelector("#projectTitle"),
   scoreValue: document.querySelector("#scoreValue"),
   metaGrid: document.querySelector("#metaGrid"),
   fieldsTable: document.querySelector("#fieldsTable"),
-  questionsPanel: document.querySelector("#questionsPanel"),
+  modalQuestionsPanel: document.querySelector("#modalQuestionsPanel"),
   questionCount: document.querySelector("#questionCount"),
   reportPreview: document.querySelector("#reportPreview"),
   turnsPanel: document.querySelector("#turnsPanel"),
@@ -28,6 +42,20 @@ const elements = {
 elements.form.addEventListener("submit", async (event) => {
   event.preventDefault();
   await analyzeDemand();
+});
+
+elements.questionsForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await submitQuestionAnswers();
+});
+
+elements.cancelIntakeButton.addEventListener("click", () => {
+  closeIntakeModal();
+});
+
+elements.editIntakeButton.addEventListener("click", () => {
+  state.isEditingIntake = true;
+  openIntakeModal();
 });
 
 elements.submitAnswersButton.addEventListener("click", async () => {
@@ -42,25 +70,38 @@ elements.followupInput.addEventListener("input", () => {
   elements.submitAnswersButton.disabled = !state.taskId;
 });
 
-elements.questionsPanel.addEventListener("click", (event) => {
+elements.modalQuestionsPanel.addEventListener("click", (event) => {
   const button = event.target.closest("[data-option-field]");
   if (!button) return;
   const field = button.dataset.optionField;
   const value = button.dataset.optionValue || "";
-  const input = document.querySelector(`[data-answer-field="${cssEscape(field)}"]`);
+  const input = elements.modalQuestionsPanel.querySelector(`[data-answer-field="${cssEscape(field)}"]`);
   if (!input) return;
 
   input.value = value;
   input.focus();
-  document
+  elements.modalQuestionsPanel
     .querySelectorAll(`[data-option-field="${cssEscape(field)}"]`)
     .forEach((item) => item.classList.toggle("selected", item === button));
 });
 
 async function analyzeDemand() {
   const userInput = elements.userInput.value.trim();
+  const brand = elements.brandInput.value.trim();
+  const channels = splitList(elements.channelsInput.value);
   if (!userInput) {
-    showNotice("请先输入一段需求。", "error");
+    showIntakeError("请先输入一段原始需求。");
+    elements.userInput.focus();
+    return;
+  }
+  if (!brand) {
+    showIntakeError("请补充品牌上下文。");
+    elements.brandInput.focus();
+    return;
+  }
+  if (channels.length === 0) {
+    showIntakeError("请至少填写一个目标渠道。");
+    elements.channelsInput.focus();
     return;
   }
 
@@ -69,8 +110,8 @@ async function analyzeDemand() {
     const payload = {
       user_input: userInput,
       context: {
-        brand: elements.brandInput.value.trim(),
-        target_channel: splitList(elements.channelsInput.value),
+        brand,
+        target_channel: channels,
       },
     };
     const task = await requestJson("/v1/agents/demand-analysis/tasks", {
@@ -79,11 +120,18 @@ async function analyzeDemand() {
     });
     state.taskId = task.demand_task_id;
     state.handoff = null;
+    state.intakeSubmitted = true;
+    state.isEditingIntake = false;
+    state.questions = [];
+    renderQuestions();
+    renderCurrentIntake(userInput, brand, channels);
+    closeIntakeModal();
     await refreshQuestions();
     await refreshReport();
+    elements.editIntakeButton.disabled = false;
     elements.handoffButton.disabled = false;
   } catch (error) {
-    showNotice(error.message, "error");
+    showIntakeError(error.message);
   } finally {
     setLoading(false);
   }
@@ -94,6 +142,11 @@ async function refreshQuestions() {
   const data = await requestJson(`/v1/agents/demand-analysis/tasks/${state.taskId}/questions`);
   state.questions = data.questions || [];
   renderQuestions();
+  if (state.questions.length > 0) {
+    openQuestionsModal();
+  } else {
+    closeQuestionsModal();
+  }
 }
 
 async function refreshReport() {
@@ -105,16 +158,9 @@ async function refreshReport() {
 
 async function submitAnswers() {
   if (!state.taskId) return;
-  const answers = {};
-  for (const question of state.questions) {
-    const input = document.querySelector(`[data-answer-field="${cssEscape(question.field)}"]`);
-    if (input && input.value.trim()) {
-      answers[question.field] = input.value.trim();
-    }
-  }
   const message = elements.followupInput.value.trim();
-  if (Object.keys(answers).length === 0 && !message) {
-    showNotice("请至少填写一个追问答案，或输入一段自由补充需求。", "warning");
+  if (!message) {
+    showNotice("请先输入一段自由补充需求。", "warning");
     return;
   }
 
@@ -122,13 +168,48 @@ async function submitAnswers() {
   try {
     await requestJson(`/v1/agents/demand-analysis/tasks/${state.taskId}/followups`, {
       method: "POST",
-      body: JSON.stringify({ message, answers }),
+      body: JSON.stringify({ message, answers: {} }),
     });
     elements.followupInput.value = "";
     await refreshQuestions();
     await refreshReport();
   } catch (error) {
     showNotice(error.message, "error");
+  } finally {
+    setLoading(false);
+  }
+}
+
+async function submitQuestionAnswers() {
+  if (!state.taskId) return;
+  const answers = {};
+  const missing = [];
+  for (const question of state.questions) {
+    const input = elements.modalQuestionsPanel.querySelector(`[data-answer-field="${cssEscape(question.field)}"]`);
+    const value = input ? input.value.trim() : "";
+    if (value) {
+      answers[question.field] = value;
+    } else {
+      missing.push(question.field);
+    }
+  }
+  if (missing.length > 0) {
+    showQuestionsError("请回答所有追问后再继续。");
+    const firstMissing = elements.modalQuestionsPanel.querySelector(`[data-answer-field="${cssEscape(missing[0])}"]`);
+    if (firstMissing) firstMissing.focus();
+    return;
+  }
+
+  setLoading(true, "正在提交追问答案...");
+  try {
+    await requestJson(`/v1/agents/demand-analysis/tasks/${state.taskId}/followups`, {
+      method: "POST",
+      body: JSON.stringify({ answers }),
+    });
+    await refreshQuestions();
+    await refreshReport();
+  } catch (error) {
+    showQuestionsError(error.message);
   } finally {
     setLoading(false);
   }
@@ -235,12 +316,11 @@ function renderQuestions() {
   elements.questionCount.textContent = String(state.questions.length);
   elements.submitAnswersButton.disabled = !state.taskId;
   if (state.questions.length === 0) {
-    elements.questionsPanel.className = "question-list empty";
-    elements.questionsPanel.textContent = "暂无待确认问题。";
+    elements.questionCount.textContent = "0";
+    elements.modalQuestionsPanel.innerHTML = "";
     return;
   }
-  elements.questionsPanel.className = "question-list";
-  elements.questionsPanel.innerHTML = state.questions
+  elements.modalQuestionsPanel.innerHTML = state.questions
     .map(
       (question) => `
         <div class="question-item">
@@ -351,8 +431,67 @@ function setLoading(isLoading, message = "") {
   elements.analyzeButton.disabled = isLoading;
   elements.submitAnswersButton.disabled = isLoading || !state.taskId;
   elements.handoffButton.disabled = isLoading || !state.taskId;
-  elements.analyzeButton.textContent = isLoading ? "处理中..." : "分析需求";
+  elements.submitQuestionsButton.disabled = isLoading;
+  elements.cancelIntakeButton.disabled = isLoading;
+  elements.editIntakeButton.disabled = isLoading || !state.intakeSubmitted;
+  elements.analyzeButton.textContent = isLoading ? "处理中..." : "开始分析";
+  elements.submitQuestionsButton.textContent = isLoading ? "处理中..." : "提交追问答案";
   if (message) showNotice(message, "success");
+}
+
+function openIntakeModal() {
+  elements.intakeModal.classList.remove("hidden");
+  elements.questionsModal.classList.add("hidden");
+  state.activeModal = "intake";
+  document.body.classList.add("modal-open");
+  elements.cancelIntakeButton.classList.toggle("hidden", !state.intakeSubmitted);
+  elements.intakeError.classList.add("hidden");
+  elements.userInput.focus();
+}
+
+function closeIntakeModal() {
+  if (!state.intakeSubmitted) return;
+  elements.intakeModal.classList.add("hidden");
+  if (state.questions.length === 0) {
+    document.body.classList.remove("modal-open");
+    state.activeModal = null;
+  }
+}
+
+function openQuestionsModal() {
+  elements.questionsModal.classList.remove("hidden");
+  elements.intakeModal.classList.add("hidden");
+  state.activeModal = "questions";
+  document.body.classList.add("modal-open");
+  elements.questionsError.classList.add("hidden");
+  const firstInput = elements.modalQuestionsPanel.querySelector("[data-answer-field]");
+  if (firstInput) firstInput.focus();
+}
+
+function closeQuestionsModal() {
+  elements.questionsModal.classList.add("hidden");
+  if (state.activeModal === "questions") {
+    state.activeModal = null;
+  }
+  if (!state.activeModal) {
+    document.body.classList.remove("modal-open");
+  }
+}
+
+function showIntakeError(message) {
+  elements.intakeError.classList.remove("hidden");
+  elements.intakeError.textContent = message;
+}
+
+function showQuestionsError(message) {
+  elements.questionsError.classList.remove("hidden");
+  elements.questionsError.textContent = message;
+}
+
+function renderCurrentIntake(userInput, brand, channels) {
+  elements.currentDemand.textContent = userInput;
+  elements.currentBrand.textContent = brand;
+  elements.currentChannels.textContent = channels.join("、");
 }
 
 function showNotice(message, type = "success") {
