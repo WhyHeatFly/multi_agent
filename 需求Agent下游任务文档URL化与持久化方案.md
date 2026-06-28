@@ -677,6 +677,98 @@ Agent 注册表配置缺失或禁用：
 - 如果 `enabled=0` 或 `callback_enabled=0`，则回调状态记录为 `skipped`。
 - 如果 endpoint 为空或格式非法，则回调状态记录为 `failed`，错误为 `invalid endpoint`。
 
+### 7.4 下游完成回调与结果更新
+
+下游 Agent 完成任务后，需要反向回调需求 Agent，让需求 Agent 持久化下游执行结果，并驱动前端局部刷新。
+
+推荐新增回调接口：
+
+```http
+POST /v1/agents/demand-analysis/handoffs/{handoff_id}/packages/{package_id}/callback
+Content-Type: application/json
+```
+
+推荐回调 payload：
+
+```json
+{
+  "agent": "cultural_ip_agent",
+  "status": "completed",
+  "result_summary": "已完成文化 IP 方向生成。",
+  "result_doc": {
+    "title": "文化IP设计师Agent输出结果",
+    "format": "markdown",
+    "url": "https://cdn.example.com/agent-results/result_xxx.md",
+    "checksum": "sha256:xxxx"
+  },
+  "artifacts": [
+    {
+      "type": "markdown",
+      "title": "文化 IP 方向文档",
+      "url": "https://cdn.example.com/agent-results/result_xxx.md"
+    }
+  ],
+  "error": null,
+  "completed_at": "2026-06-28T12:00:00+00:00"
+}
+```
+
+回调处理流程：
+
+1. 校验 `handoff_id`、`package_id` 和 `agent` 是否匹配。
+2. 将下游执行状态、结果摘要、结果文档 URL、错误信息写入数据库。
+3. 更新 `handoff_packages.execution_status` 或新增 `handoff_results` 记录。
+4. 汇总更新 `handoff_batches.status`。
+5. 前端通过状态查询接口获取最新 handoff 状态并局部刷新页面。
+
+建议新增 `handoff_results` 表：
+
+```sql
+CREATE TABLE IF NOT EXISTS handoff_results (
+    result_id TEXT PRIMARY KEY,
+    handoff_id TEXT NOT NULL,
+    package_id TEXT NOT NULL,
+    demand_task_id TEXT NOT NULL,
+    report_id TEXT NOT NULL,
+    agent TEXT NOT NULL,
+    status TEXT NOT NULL,
+    result_summary TEXT,
+    result_doc_url TEXT,
+    result_doc_title TEXT,
+    result_doc_format TEXT,
+    result_doc_checksum TEXT,
+    artifacts_json TEXT NOT NULL DEFAULT '[]',
+    error TEXT,
+    received_at TEXT NOT NULL,
+    completed_at TEXT
+);
+```
+
+推荐下游执行状态：
+
+| 状态 | 说明 |
+| --- | --- |
+| `pending` | 已生成任务包，尚未收到下游回调 |
+| `running` | 下游已接收并开始执行 |
+| `completed` | 下游执行成功 |
+| `failed` | 下游执行失败 |
+| `cancelled` | 下游取消执行 |
+
+建议查询接口：
+
+```http
+GET /v1/agents/demand-analysis/handoffs/{handoff_id}
+GET /v1/agents/demand-analysis/tasks/{demand_task_id}/handoffs
+```
+
+查询响应需要包含：
+
+- handoff 批次状态。
+- 每个 package 的回调发送状态。
+- 每个 package 的下游执行状态。
+- 下游结果文档 URL。
+- 错误原因和完成时间。
+
 ## 8. 前端交互调整
 
 ### 8.1 Handoff 卡片
@@ -810,6 +902,86 @@ GET /v1/agents/demand-analysis/handoff-documents/{doc_id}/markdown
 
 这样历史 demo 数据不会立刻失效。
 
+### 8.4 下游回调后的前端实时更新
+
+当前项目后端使用 Python 标准库 `http.server` 和 `ThreadingHTTPServer`，前端是静态页面，通过 `fetch()` 主动请求数据。当前没有 WebSocket、SSE、事件总线或长连接管理能力。
+
+因此，不建议第一版直接实现 WebSocket。WebSocket 适合双向实时通信，但在当前技术栈下需要额外处理连接管理、订阅关系、断线重连、线程安全、广播和服务端长连接能力，实现成本偏高。
+
+第一版推荐使用轮询实现局部更新：
+
+```text
+下游 Agent 完成任务
+  -> POST 回调需求 Agent
+  -> 需求 Agent 写入 handoff_results / 更新 handoff_packages
+  -> 前端每 2-3 秒 GET handoff 状态
+  -> 局部更新 Handoff 卡片、状态徽标和结果预览按钮
+  -> 所有下游任务完成后停止轮询
+```
+
+推荐前端行为：
+
+1. `generateHandoff()` 成功后保存 `handoff_id`。
+2. 启动 `startHandoffPolling(handoff_id)`。
+3. 每 2-3 秒请求 `GET /v1/agents/demand-analysis/handoffs/{handoff_id}`。
+4. 调用 `renderHandoff()` 或新增 `renderHandoffStatus()` 局部更新卡片。
+5. 当所有 package 状态都进入终态 `completed`、`failed`、`cancelled` 或 `skipped` 后停止轮询。
+6. 页面离开或重新生成 handoff 时清理旧轮询定时器。
+
+轮询需要更新的 UI：
+
+- 每个 Agent 的执行状态：`pending`、`running`、`completed`、`failed`、`cancelled`。
+- 下游回调接收时间和完成时间。
+- 下游结果文档 URL。
+- “预览结果”按钮。
+- 错误原因。
+- 批次整体状态。
+
+推荐前端状态字段：
+
+```js
+const state = {
+  handoff: [],
+  activeHandoffId: null,
+  handoffPollingTimer: null,
+};
+```
+
+轮询伪代码：
+
+```js
+function startHandoffPolling(handoffId) {
+  stopHandoffPolling();
+  state.activeHandoffId = handoffId;
+  state.handoffPollingTimer = window.setInterval(async () => {
+    const data = await requestJson(`/v1/agents/demand-analysis/handoffs/${handoffId}`);
+    state.handoff = data.task_packages || [];
+    renderHandoff(state.handoff);
+    if (data.is_terminal) {
+      stopHandoffPolling();
+    }
+  }, 3000);
+}
+
+function stopHandoffPolling() {
+  if (state.handoffPollingTimer) {
+    window.clearInterval(state.handoffPollingTimer);
+    state.handoffPollingTimer = null;
+  }
+}
+```
+
+后续演进路线：
+
+1. **SSE**：如果只需要“服务端推送前端”，可以在后端能力升级后使用 `EventSource`。SSE 比 WebSocket 简单，适合下游完成、失败、状态变化等单向事件。
+2. **WebSocket**：如果后续需要前端实时控制任务、暂停、重试、多人协同查看同一任务，或者后端迁移到 FastAPI / Starlette / aiohttp，再引入 WebSocket。
+
+推荐结论：
+
+- MVP 第一版：轮询。
+- 中期体验优化：SSE。
+- 长期复杂协同：WebSocket。
+
 ## 9. 配置项汇总
 
 ### 9.1 文档上传
@@ -840,7 +1012,7 @@ DEMAND_HANDOFF_CALLBACK_RESPONSE_LIMIT=1000
 1. handoff 生成后每个 Agent 都有独立 `package_id`、`doc_id`。
 2. 文档上传成功后返回 `detail_doc.url`、`checksum`、`size_bytes`。
 3. 响应中不再依赖 `detail_doc.markdown`。
-4. `handoff_batches`、`handoff_packages`、`handoff_documents` 三类记录正确写入 SQLite。
+4. `handoff_batches`、`handoff_packages`、`handoff_documents`、`handoff_results` 记录正确写入 SQLite。
 5. 上传失败时保留本地 Markdown，记录 `upload_status=failed` 和错误信息。
 6. 上传失败时不调用下游 Agent。
 7. `agent_registry` 中配置 endpoint 后，dispatcher 正确 POST 下游。
@@ -851,6 +1023,8 @@ DEMAND_HANDOFF_CALLBACK_RESPONSE_LIMIT=1000
 12. 旧数据中仍然包含 `detail_doc.markdown` 时，前端预览逻辑不受影响。
 13. 新数据只包含 `detail_doc.url` 时，前端会尝试读取在线 Markdown。
 14. 如果实现后端代理接口，`doc_id` 可以正确返回 `text/markdown`。
+15. 下游完成回调后，`handoff_results` 写入结果状态和结果文档 URL。
+16. 所有 package 进入终态后，handoff 批次状态正确汇总。
 
 ### 10.2 API 测试
 
@@ -862,6 +1036,8 @@ DEMAND_HANDOFF_CALLBACK_RESPONSE_LIMIT=1000
 4. 对未知 Agent，任务包和文档仍可生成，但回调状态为失败。
 5. 对已禁用 Agent，任务包和文档仍可生成，但回调状态为跳过。
 6. 如果提供 `GET /handoff-documents/{doc_id}/markdown`，接口能读取本地文件或 OSS URL 并返回 Markdown。
+7. `POST /handoffs/{handoff_id}/packages/{package_id}/callback` 可以接收下游结果并落库。
+8. `GET /handoffs/{handoff_id}` 可以返回最新 package 状态和下游结果。
 
 ### 10.3 前端验证
 
@@ -874,6 +1050,8 @@ DEMAND_HANDOFF_CALLBACK_RESPONSE_LIMIT=1000
 5. 旧结构和新结构都可以预览。
 6. OSS / CDN 跨域失败时，页面显示错误提示，不出现空弹窗。
 7. 使用后端代理预览接口时，不要求浏览器直接跨域访问 OSS。
+8. handoff 生成后页面启动轮询，并在下游回调完成后局部更新状态。
+9. 所有下游任务完成或失败后，页面停止轮询。
 
 ## 11. 分阶段落地建议
 
@@ -927,13 +1105,17 @@ DEMAND_HANDOFF_CALLBACK_RESPONSE_LIMIT=1000
 
 - 增加手动重试回调接口。
 - 增加 handoff 查询接口。
-- 增加页面上的状态刷新能力。
+- 增加下游完成回调接口。
+- 增加 `handoff_results` 表。
+- 增加页面上的轮询刷新能力。
 
 可选接口：
 
 ```http
 GET /v1/agents/demand-analysis/tasks/{demand_task_id}/handoffs
+GET /v1/agents/demand-analysis/handoffs/{handoff_id}
 POST /v1/agents/demand-analysis/handoffs/{handoff_id}/retry
+POST /v1/agents/demand-analysis/handoffs/{handoff_id}/packages/{package_id}/callback
 ```
 
 ## 12. 风险与取舍
@@ -976,6 +1158,19 @@ POST /v1/agents/demand-analysis/handoffs/{handoff_id}/retry
 3. 如果文档包含敏感信息，公开 OSS / CDN URL 会扩大访问面。
 4. 如果不希望浏览器直接访问 OSS，应该使用需求 Agent 后端代理接口读取并返回 Markdown。
 
+### 12.6 WebSocket 实现取舍
+
+当前系统使用标准库 `http.server`，直接实现 WebSocket 需要补连接管理、订阅、断线重连和广播机制，改动成本明显高于轮询。
+
+第一版建议使用轮询，原因是：
+
+1. 和当前 `fetch()` 前端模型一致。
+2. 不需要引入新的后端框架或长连接能力。
+3. 下游 Agent 任务通常不是毫秒级实时场景，2-3 秒轮询足够友好。
+4. 后续可以平滑升级为 SSE 或 WebSocket。
+
+如果后端迁移到 FastAPI / Starlette / aiohttp，并且需要更复杂的双向协作，再考虑 WebSocket。
+
 ## 13. 最终推荐方案
 
 第一版实施建议：
@@ -989,5 +1184,7 @@ POST /v1/agents/demand-analysis/handoffs/{handoff_id}/retry
 7. `handoff` 响应改为 URL + 元数据。
 8. Demo 页面通过 `detail_doc.url` 在线预览 Markdown，并兼容旧的 `detail_doc.markdown`。
 9. 如果 OSS CORS 或权限模型不允许前端直连，则补充后端 Markdown 代理预览接口。
+10. 增加下游完成回调接口和 `handoff_results` 表。
+11. 第一版前端使用轮询刷新 handoff 状态，暂不引入 WebSocket；后续按需要升级 SSE 或 WebSocket。
 
 这条路径改动集中、兼容当前系统，并且能自然演进到生产级多 Agent 编排。
