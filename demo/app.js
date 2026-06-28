@@ -23,6 +23,8 @@ const elements = {
   reportModal: document.querySelector("#reportModal"),
   intakeError: document.querySelector("#intakeError"),
   questionsError: document.querySelector("#questionsError"),
+  intakeProgress: document.querySelector("#intakeProgress"),
+  questionsProgress: document.querySelector("#questionsProgress"),
   userInput: document.querySelector("#userInput"),
   brandInput: document.querySelector("#brandInput"),
   channelsInput: document.querySelector("#channelsInput"),
@@ -118,7 +120,7 @@ async function analyzeDemand() {
     return;
   }
 
-  setLoading(true, "正在分析需求...");
+  setLoading(true, "正在分析需求...", "intake");
   try {
     const payload = {
       user_input: userInput,
@@ -146,7 +148,7 @@ async function analyzeDemand() {
   } catch (error) {
     showIntakeError(error.message);
   } finally {
-    setLoading(false);
+    setLoading(false, "", "intake");
   }
 }
 
@@ -177,7 +179,7 @@ async function submitAnswers() {
     return;
   }
 
-  setLoading(true, "正在提交补充内容...");
+  setLoading(true, "正在提交补充内容...", "followup");
   try {
     await requestJson(`/v1/agents/demand-analysis/tasks/${state.taskId}/followups`, {
       method: "POST",
@@ -189,7 +191,7 @@ async function submitAnswers() {
   } catch (error) {
     showNotice(error.message, "error");
   } finally {
-    setLoading(false);
+    setLoading(false, "", "followup");
   }
 }
 
@@ -213,7 +215,7 @@ async function submitQuestionAnswers() {
     return;
   }
 
-  setLoading(true, "正在提交追问答案...");
+  setLoading(true, "正在提交追问答案...", "questions");
   try {
     await requestJson(`/v1/agents/demand-analysis/tasks/${state.taskId}/followups`, {
       method: "POST",
@@ -224,13 +226,13 @@ async function submitQuestionAnswers() {
   } catch (error) {
     showQuestionsError(error.message);
   } finally {
-    setLoading(false);
+    setLoading(false, "", "questions");
   }
 }
 
 async function generateHandoff() {
   if (!state.taskId) return;
-  setLoading(true, "正在生成下游任务包...");
+  setLoading(true, "正在生成下游任务包...", "handoff");
   try {
     const data = await requestJson(`/v1/agents/demand-analysis/tasks/${state.taskId}/handoff`, {
       method: "POST",
@@ -244,7 +246,7 @@ async function generateHandoff() {
   } catch (error) {
     showNotice(error.message, "error");
   } finally {
-    setLoading(false);
+    setLoading(false, "", "handoff");
   }
 }
 
@@ -494,7 +496,7 @@ function reportPreviewHtml(data) {
   `;
 }
 
-function setLoading(isLoading, message = "") {
+function setLoading(isLoading, message = "", scope = "global") {
   elements.analyzeButton.disabled = isLoading;
   elements.submitAnswersButton.disabled = isLoading || !state.taskId;
   elements.handoffButton.disabled = isLoading || !state.taskId;
@@ -502,9 +504,38 @@ function setLoading(isLoading, message = "") {
   elements.submitQuestionsButton.disabled = isLoading;
   elements.cancelIntakeButton.disabled = isLoading;
   elements.editIntakeButton.disabled = isLoading || !state.intakeSubmitted;
-  elements.analyzeButton.textContent = isLoading ? "处理中..." : "开始分析";
-  elements.submitQuestionsButton.textContent = isLoading ? "处理中..." : "提交追问答案";
+  elements.analyzeButton.textContent = isLoading && scope === "intake" ? "处理中..." : "开始分析";
+  elements.submitQuestionsButton.textContent = isLoading && scope === "questions" ? "处理中..." : "提交追问答案";
+  elements.submitAnswersButton.textContent =
+    isLoading && scope === "followup" ? "提交中..." : "提交补充并刷新报告";
+  elements.handoffButton.textContent = isLoading && scope === "handoff" ? "生成中..." : "生成三类 Agent 任务包";
+  setFormControlsDisabled(elements.form, isLoading && scope === "intake");
+  setFormControlsDisabled(elements.questionsForm, isLoading && scope === "questions");
+  setButtonLoading(scope, isLoading);
+  elements.intakeProgress.classList.toggle("hidden", !(isLoading && scope === "intake"));
+  elements.questionsProgress.classList.toggle("hidden", !(isLoading && scope === "questions"));
+  elements.intakeModal.classList.toggle("is-processing", isLoading && scope === "intake");
+  elements.questionsModal.classList.toggle("is-processing", isLoading && scope === "questions");
   if (message) showNotice(message, "success");
+}
+
+function setButtonLoading(scope, isLoading) {
+  const scopedButtons = {
+    intake: elements.analyzeButton,
+    questions: elements.submitQuestionsButton,
+    followup: elements.submitAnswersButton,
+    handoff: elements.handoffButton,
+  };
+  Object.values(scopedButtons).forEach((button) => button.classList.remove("is-loading"));
+  if (isLoading && scopedButtons[scope]) {
+    scopedButtons[scope].classList.add("is-loading");
+  }
+}
+
+function setFormControlsDisabled(form, disabled) {
+  form.querySelectorAll("input, textarea, button").forEach((control) => {
+    control.disabled = disabled;
+  });
 }
 
 function openIntakeModal() {

@@ -29,6 +29,13 @@
             <input id="channelsInput" value="小红书、线下文旅店" required />
           </label>
           <p id="intakeError" class="form-error hidden"></p>
+          <div id="intakeProgress" class="processing-panel hidden" aria-live="polite">
+            <span class="spinner" aria-hidden="true"></span>
+            <div>
+              <strong>正在理解需求</strong>
+              <p>抽取目标人群、场景、预算和渠道信息，并准备后续追问。</p>
+            </div>
+          </div>
           <div class="modal-actions">
             <button id="analyzeButton" type="submit">开始分析</button>
             <button id="cancelIntakeButton" class="secondary-button hidden" type="button">取消</button>
@@ -48,6 +55,13 @@
         <form id="questionsForm" class="form-stack">
           <div id="modalQuestionsPanel" class="question-list"></div>
           <p id="questionsError" class="form-error hidden"></p>
+          <div id="questionsProgress" class="processing-panel hidden" aria-live="polite">
+            <span class="spinner" aria-hidden="true"></span>
+            <div>
+              <strong>正在吸收追问答案</strong>
+              <p>更新需求字段、重新评分，并刷新报告内容。</p>
+            </div>
+          </div>
           <button id="submitQuestionsButton" type="submit">提交追问答案</button>
         </form>
       </section>
