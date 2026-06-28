@@ -70,7 +70,7 @@ SQLite 当前包含两张表：
 2. 新增 handoff 相关表，专门管理下游任务包、文档资产和回调记录。
 3. Markdown 文档仍然由需求 Agent 生成，但正式通信只传 URL 和元数据。
 4. 上传能力通过适配器抽象，避免把具体云厂商或内部文件服务写死在业务逻辑里。
-5. 下游 Agent endpoint 通过配置中心读取，需求 Agent 不在代码里硬编码下游地址。
+5. 下游 Agent endpoint 先通过本地 SQLite 的 Agent 注册表读取，并提供管理页面进行可视化维护；需求 Agent 不在代码里硬编码下游地址。
 6. 第一版使用公开 CDN URL，方便下游 Agent 无鉴权读取文档。
 7. demo 页面保留在线预览能力，点击 handoff 文档时通过 URL 拉取 Markdown 并渲染。
 
@@ -329,6 +329,88 @@ CREATE INDEX IF NOT EXISTS idx_handoff_documents_package
 ON handoff_documents(package_id);
 ```
 
+### 5.5 agent_registry
+
+用于替代第一版外部配置中心，持久化管理下游 Agent 的回调配置。它本质上是一张轻量的业务配置表，可由管理页面直接编辑。
+
+```sql
+CREATE TABLE IF NOT EXISTS agent_registry (
+    agent TEXT PRIMARY KEY,
+    agent_name TEXT NOT NULL,
+    description TEXT,
+    endpoint TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    callback_enabled INTEGER NOT NULL DEFAULT 1,
+    auth_type TEXT NOT NULL DEFAULT 'none',
+    auth_header_name TEXT,
+    auth_token TEXT,
+    timeout_seconds INTEGER NOT NULL DEFAULT 30,
+    environment TEXT NOT NULL DEFAULT 'default',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+```
+
+字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `agent` | 下游 Agent 标识，例如 `cultural_ip_agent` |
+| `agent_name` | 展示名，例如 `文化IP设计师Agent` |
+| `description` | 管理页面展示的说明 |
+| `endpoint` | 下游 Agent handoff 回调地址 |
+| `enabled` | Agent 是否启用 |
+| `callback_enabled` | 是否允许主动回调该 Agent |
+| `auth_type` | 鉴权类型，第一版支持 `none`、`bearer`、`custom_header` |
+| `auth_header_name` | 自定义鉴权 header 名称；`bearer` 可默认为 `Authorization` |
+| `auth_token` | 回调鉴权 token；如果安全要求提高，后续可迁移到密钥系统 |
+| `timeout_seconds` | 回调超时时间 |
+| `environment` | 环境标识，例如 `dev`、`test`、`prod` |
+| `metadata_json` | 扩展配置，例如负责人、标签、限流策略 |
+| `created_at` | 创建时间 |
+| `updated_at` | 更新时间 |
+
+索引建议：
+
+```sql
+CREATE INDEX IF NOT EXISTS idx_agent_registry_environment
+ON agent_registry(environment);
+
+CREATE INDEX IF NOT EXISTS idx_agent_registry_enabled
+ON agent_registry(enabled, callback_enabled);
+```
+
+第一版建议在初始化数据库时写入三条默认记录，便于本地 demo 直接使用：
+
+```json
+[
+  {
+    "agent": "cultural_ip_agent",
+    "agent_name": "文化IP设计师Agent",
+    "endpoint": "http://127.0.0.1:9001/v1/agents/cultural-ip/handoff",
+    "enabled": true,
+    "callback_enabled": false
+  },
+  {
+    "agent": "designer_agent",
+    "agent_name": "设计师Agent",
+    "endpoint": "http://127.0.0.1:9002/v1/agents/designer/handoff",
+    "enabled": true,
+    "callback_enabled": false
+  },
+  {
+    "agent": "marketer_agent",
+    "agent_name": "营销Agent",
+    "endpoint": "http://127.0.0.1:9003/v1/agents/marketer/handoff",
+    "enabled": true,
+    "callback_enabled": false
+  }
+]
+```
+
+默认将 `callback_enabled` 设为 `false`，避免本地演示时误发请求；需要联调时再在管理页面打开。
+
 ## 6. 模块设计
 
 ### 6.1 DocumentUploader
@@ -379,7 +461,7 @@ DEMAND_DOC_OBJECT_KEY_FIELD=object_key
 
 ### 6.2 AgentRegistryProvider
 
-下游 Agent 地址不建议写死在代码里。建议新增配置中心读取层。
+下游 Agent 地址不建议写死在代码里。第一版建议新增基于 SQLite 的 Agent 注册表读取层，从 `agent_registry` 表读取 endpoint、开关、鉴权和超时配置。
 
 推荐接口：
 
@@ -398,53 +480,109 @@ class AgentRegistryProvider:
         raise NotImplementedError
 ```
 
-第一版建议实现 HTTP 配置中心 provider，带 TTL 缓存。
+第一版实现 `DatabaseAgentRegistryProvider`：
 
-推荐环境变量：
+- 从 `agent_registry` 表读取指定 `agent` 的配置。
+- 仅当 `enabled=1` 且 `callback_enabled=1` 时返回可回调 endpoint。
+- 将 `auth_type`、`auth_header_name`、`auth_token` 转换为实际 HTTP headers。
+- 将 `timeout_seconds` 传给回调分发器。
+- 如果未找到 Agent，返回 `None`，并将回调状态记录为 `skipped` 或 `failed`。
 
-```bash
-DEMAND_AGENT_REGISTRY_ENDPOINT=https://config-center.example.com/demand-agent/agents
-DEMAND_AGENT_REGISTRY_TOKEN=xxx
-DEMAND_AGENT_REGISTRY_TTL_SECONDS=60
+推荐管理接口：
+
+```http
+GET /v1/agents/demand-analysis/agent-registry
+POST /v1/agents/demand-analysis/agent-registry
+PUT /v1/agents/demand-analysis/agent-registry/{agent}
+PATCH /v1/agents/demand-analysis/agent-registry/{agent}/toggle
+DELETE /v1/agents/demand-analysis/agent-registry/{agent}
 ```
 
-推荐配置中心返回：
+推荐 API 返回结构：
 
 ```json
 {
-  "agents": {
-    "cultural_ip_agent": {
+  "agents": [
+    {
+      "agent": "cultural_ip_agent",
+      "agent_name": "文化IP设计师Agent",
+      "description": "负责生成文化 IP 方向",
       "endpoint": "https://agent.example.com/cultural-ip/handoff",
       "enabled": true,
+      "callback_enabled": true,
+      "auth_type": "bearer",
+      "auth_header_name": "Authorization",
       "timeout_seconds": 30,
-      "headers": {
-        "Authorization": "Bearer xxx"
-      }
+      "environment": "dev",
+      "metadata": {}
     },
-    "designer_agent": {
+    {
+      "agent": "designer_agent",
+      "agent_name": "设计师Agent",
+      "description": "负责生成视觉和产品设计方案",
       "endpoint": "https://agent.example.com/designer/handoff",
       "enabled": true,
+      "callback_enabled": true,
+      "auth_type": "none",
+      "auth_header_name": null,
       "timeout_seconds": 30,
-      "headers": {}
+      "environment": "dev",
+      "metadata": {}
     }
-  }
+  ]
 }
 ```
 
-缓存策略：
+鉴权处理：
 
-1. handoff 时优先读缓存。
-2. 缓存过期后请求配置中心。
-3. 配置中心失败时，如果已有旧缓存，则继续使用旧缓存并记录 warning。
-4. 如果没有缓存且读取失败，则对应 Agent 回调状态记为 `failed`。
+1. `auth_type=none`：不附加鉴权 header。
+2. `auth_type=bearer`：发送 `Authorization: Bearer {auth_token}`。
+3. `auth_type=custom_header`：发送 `{auth_header_name}: {auth_token}`。
 
-### 6.3 HandoffDispatcher
+安全建议：
+
+- 第一版为了降低实现成本，可以将 `auth_token` 存在 SQLite。
+- 管理页面展示时应隐藏 token 明文，只允许重新填写覆盖。
+- 如果后续安全要求提高，可将 token 迁移到密钥管理系统，`agent_registry` 仅保存 secret 引用。
+
+### 6.3 Agent 注册表管理页面
+
+为了降低配置成本，建议在 demo 或后续管理系统中增加一个“下游 Agent 配置”页面。
+
+页面能力：
+
+1. 查看所有下游 Agent。
+2. 新增 Agent。
+3. 编辑展示名、描述、endpoint、超时时间、环境、metadata。
+4. 开关 `enabled` 和 `callback_enabled`。
+5. 配置鉴权方式，但不回显 token 明文。
+6. 提供“测试连接”按钮，向 endpoint 发送轻量探测请求或 dry-run handoff payload。
+7. 显示最近一次回调状态、HTTP 状态码和错误摘要。
+
+页面字段建议：
+
+| 字段 | 控件 |
+| --- | --- |
+| Agent 标识 | 文本输入，创建后不建议修改 |
+| 展示名 | 文本输入 |
+| 描述 | 多行文本 |
+| Endpoint | URL 输入 |
+| 启用 Agent | 开关 |
+| 启用主动回调 | 开关 |
+| 鉴权类型 | 下拉选择 |
+| Header 名称 | 文本输入 |
+| Token | 密码输入，只写不读 |
+| 超时时间 | 数字输入 |
+| 环境 | 下拉选择或文本输入 |
+| 扩展配置 | JSON 编辑框 |
+
+### 6.4 HandoffDispatcher
 
 新增下游回调分发器。
 
 职责：
 
-1. 根据 agent 从 `AgentRegistryProvider` 获取 endpoint。
+1. 根据 agent 从 `DatabaseAgentRegistryProvider` 获取 endpoint。
 2. 构造回调 payload。
 3. 发起 HTTP POST。
 4. 返回回调结果。
@@ -482,7 +620,7 @@ class DispatchResult:
 11. 写入 `handoff_documents`。
 12. 构造不含 Markdown 正文的 `detail_doc`。
 13. 写入 `handoff_packages`。
-14. 调用 `HandoffDispatcher` 主动回调下游 Agent。
+14. 调用 `HandoffDispatcher`，从 `agent_registry` 读取 endpoint 后主动回调下游 Agent。
 15. 更新 `handoff_packages.callback_*` 字段。
 16. 汇总更新 `handoff_batches.status`。
 17. 返回 task packages。
@@ -532,10 +670,12 @@ class DispatchResult:
 - 记录 HTTP 状态码、响应摘要或异常。
 - 第一版不自动重试，避免复杂后台任务；后续可以增加手动重试接口。
 
-配置中心失败：
+Agent 注册表配置缺失或禁用：
 
-- 如果有未过期或上一次成功缓存，继续使用。
-- 如果没有可用配置，则对应 Agent 回调失败，但文档仍可生成和上传。
+- 文档仍然生成和上传。
+- 如果 `agent_registry` 中不存在该 Agent，则回调状态记录为 `failed`，错误为 `agent registry not found`。
+- 如果 `enabled=0` 或 `callback_enabled=0`，则回调状态记录为 `skipped`。
+- 如果 endpoint 为空或格式非法，则回调状态记录为 `failed`，错误为 `invalid endpoint`。
 
 ## 8. 前端交互调整
 
@@ -556,7 +696,9 @@ Handoff 输出区域建议展示：
 
 - `文档上传失败`
 - `下游通知失败`
-- `配置中心未找到 Agent endpoint`
+- `未配置下游 Agent endpoint`
+- `该 Agent 已禁用`
+- `该 Agent 未开启主动回调`
 
 ### 8.2 Markdown 在线预览
 
@@ -617,15 +759,7 @@ DEMAND_DOC_PUBLIC_URL_FIELD=url
 DEMAND_DOC_OBJECT_KEY_FIELD=object_key
 ```
 
-### 9.2 配置中心
-
-```bash
-DEMAND_AGENT_REGISTRY_ENDPOINT=https://config-center.example.com/demand-agent/agents
-DEMAND_AGENT_REGISTRY_TOKEN=xxx
-DEMAND_AGENT_REGISTRY_TTL_SECONDS=60
-```
-
-### 9.3 下游回调
+### 9.2 下游回调
 
 ```bash
 DEMAND_HANDOFF_CALLBACK_ENABLED=true
@@ -645,10 +779,12 @@ DEMAND_HANDOFF_CALLBACK_RESPONSE_LIMIT=1000
 4. `handoff_batches`、`handoff_packages`、`handoff_documents` 三类记录正确写入 SQLite。
 5. 上传失败时保留本地 Markdown，记录 `upload_status=failed` 和错误信息。
 6. 上传失败时不调用下游 Agent。
-7. 配置中心返回 endpoint 后，dispatcher 正确 POST 下游。
+7. `agent_registry` 中配置 endpoint 后，dispatcher 正确 POST 下游。
 8. 下游回调失败时记录 `callback_status=failed`。
 9. 服务重启后可以查询已有 handoff 记录。
-10. 旧数据中仍然包含 `detail_doc.markdown` 时，前端预览逻辑不受影响。
+10. Agent 被禁用或未开启主动回调时，回调状态记录为 `skipped`。
+11. 管理接口可以新增、编辑、启停 Agent 配置。
+12. 旧数据中仍然包含 `detail_doc.markdown` 时，前端预览逻辑不受影响。
 
 ### 10.2 API 测试
 
@@ -657,7 +793,8 @@ DEMAND_HANDOFF_CALLBACK_RESPONSE_LIMIT=1000
 1. `POST /handoff` 返回 `handoff_id`。
 2. 每个 `task_package.detail_doc.url` 可用。
 3. 每个 `task_package.callback.status` 和数据库记录一致。
-4. 对未知 Agent，任务包仍可生成，但回调状态为失败或跳过。
+4. 对未知 Agent，任务包和文档仍可生成，但回调状态为失败。
+5. 对已禁用 Agent，任务包和文档仍可生成，但回调状态为跳过。
 
 ### 10.3 前端验证
 
@@ -666,7 +803,8 @@ DEMAND_HANDOFF_CALLBACK_RESPONSE_LIMIT=1000
 1. Handoff 卡片展示 URL、上传状态和回调状态。
 2. 点击预览按钮可以在线拉取 Markdown 并渲染。
 3. Markdown 拉取失败时给出友好提示。
-4. 旧结构和新结构都可以预览。
+4. 下游 Agent 配置页面可以完成新增、编辑、启停和测试连接。
+5. 旧结构和新结构都可以预览。
 
 ## 11. 分阶段落地建议
 
@@ -682,7 +820,7 @@ DEMAND_HANDOFF_CALLBACK_RESPONSE_LIMIT=1000
 价值：
 
 - 先把 handoff 数据结构稳定下来。
-- 不依赖外部文件服务和配置中心。
+- 不依赖外部文件服务。
 
 ### 阶段二：HTTP 上传适配器
 
@@ -697,18 +835,21 @@ DEMAND_HANDOFF_CALLBACK_RESPONSE_LIMIT=1000
 - 下游 Agent 可以通过 URL 读取 Markdown。
 - 页面可以基于 URL 在线预览。
 
-### 阶段三：配置中心和主动回调
+### 阶段三：Agent 注册表管理和主动回调
 
 目标：
 
-- 接入 `AgentRegistryProvider`。
-- 根据配置中心获取下游 Agent endpoint。
+- 新增 `agent_registry` 表。
+- 接入 `DatabaseAgentRegistryProvider`。
+- 增加下游 Agent 配置管理接口和管理页面。
+- 根据 `agent_registry` 获取下游 Agent endpoint。
 - 主动 POST handoff payload。
 - 记录回调状态。
 
 价值：
 
 - 需求 Agent 从“生成任务包”升级为“分发任务包”。
+- endpoint 和开关可以可视化维护，不需要改代码。
 - 多 Agent 协作链路真正闭环。
 
 ### 阶段四：重试和运维能力
@@ -744,9 +885,14 @@ POST /v1/agents/demand-analysis/handoffs/{handoff_id}/retry
 
 如果下游 Agent endpoint 还不稳定，可以先只实现 URL 返回和落库，回调能力通过配置开关控制。
 
-### 12.3 配置中心可用性
+### 12.3 Agent 注册表配置风险
 
-配置中心不可用会影响下游回调。建议第一版使用 TTL 缓存和上一次成功配置兜底。
+使用 SQLite 表管理 Agent 配置实现成本低，但需要注意：
+
+1. endpoint 配置错误会导致回调失败。
+2. `auth_token` 存在数据库中有泄露风险，管理页面不应回显明文。
+3. 多环境共用一张表时，要明确 `environment` 过滤策略，避免 dev 请求误发到 prod。
+4. 后续如果多个服务都要共享 Agent 注册表，可以再抽成独立配置中心或管理服务。
 
 ### 12.4 不建议立即全量拆表
 
@@ -757,11 +903,12 @@ POST /v1/agents/demand-analysis/handoffs/{handoff_id}/retry
 第一版实施建议：
 
 1. 保留现有 `demand_tasks` 和 `demand_reports`。
-2. 新增 `handoff_batches`、`handoff_packages`、`handoff_documents`。
+2. 新增 `handoff_batches`、`handoff_packages`、`handoff_documents`、`agent_registry`。
 3. 增加 `DocumentUploader`，第一版实现 HTTP 上传适配器。
-4. 增加 `AgentRegistryProvider`，第一版按 HTTP 配置中心 + TTL 缓存设计。
+4. 增加 `DatabaseAgentRegistryProvider`，第一版从 SQLite 的 `agent_registry` 表读取下游 Agent 配置。
 5. 增加 `HandoffDispatcher`，负责主动 HTTP 回调下游 Agent。
-6. `handoff` 响应改为 URL + 元数据。
-7. Demo 页面通过 `detail_doc.url` 在线预览 Markdown。
+6. 增加下游 Agent 配置管理接口和可视化页面。
+7. `handoff` 响应改为 URL + 元数据。
+8. Demo 页面通过 `detail_doc.url` 在线预览 Markdown。
 
 这条路径改动集中、兼容当前系统，并且能自然演进到生产级多 Agent 编排。
