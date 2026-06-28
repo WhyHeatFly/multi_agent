@@ -704,6 +704,15 @@ Handoff 输出区域建议展示：
 
 当前页面已经有报告/文档预览弹窗，可以复用。
 
+当前项目实际情况：
+
+- `demand_agent/service.py` 的 `handoff()` 目前只返回 `detail_doc.markdown_path` 和 `detail_doc.markdown`。
+- `demo/app.js` 的 Handoff 卡片只展示 `detail_doc.markdown_path`。
+- 点击“预览详细文档”时，前端只读取 `detail_doc.markdown` 并调用 `openMarkdownDocument()`。
+- 如果未来任务包只返回阿里云 OSS / CDN 的 `detail_doc.url`，当前按钮会直接失效，因为它不会主动 fetch URL。
+
+因此，支持阿里云 OSS 在线 Markdown 预览需要把预览逻辑从“只读内联 Markdown”升级为“优先兼容内联 Markdown，没有正文时读取 URL”。
+
 点击“预览详细文档”时：
 
 1. 如果 `detail_doc.markdown` 存在，兼容旧数据，直接渲染。
@@ -711,11 +720,66 @@ Handoff 输出区域建议展示：
 3. 获取 Markdown 文本后调用现有 `openMarkdownDocument()`。
 4. 如果 fetch 失败，展示错误提示。
 
+推荐前端逻辑：
+
+```js
+async function openHandoffDetailDocument(packageItem) {
+  const detailDoc = packageItem.detail_doc || {};
+  const title = detailDoc.title || `${packageItem.agent}详细任务描述`;
+
+  if (detailDoc.markdown) {
+    openMarkdownDocument(title, detailDoc.markdown);
+    return;
+  }
+
+  if (detailDoc.url) {
+    try {
+      showNotice("正在加载在线 Markdown 文档...", "success");
+      const response = await fetch(detailDoc.url);
+      if (!response.ok) {
+        throw new Error(`在线文档读取失败：${response.status}`);
+      }
+      const markdown = await response.text();
+      openMarkdownDocument(title, markdown);
+    } catch (error) {
+      showNotice(error.message, "error");
+    }
+    return;
+  }
+
+  showNotice("当前任务包没有可预览的详细文档。", "warning");
+}
+```
+
+Handoff 卡片展示文档地址时也需要兼容新旧字段：
+
+```js
+const docAddress = item.detail_doc?.url || item.detail_doc?.markdown_path || "--";
+```
+
+同时 `withoutMarkdownPayload()` 中的提示也应从 `[see detail_doc.markdown_path]` 调整为优先提示 `[see detail_doc.url]`。
+
 注意：
 
 - 公开 CDN URL 需要支持浏览器 GET。
-- 如果 demo 页面和 CDN 跨域，需要 CDN 配置 CORS。
-- 如果 CDN 无法配置 CORS，则新增后端代理预览接口。
+- 如果 demo 页面和 OSS / CDN 跨域，需要阿里云 OSS Bucket 配置 CORS，允许当前页面域名执行 `GET`。
+- 如果 OSS URL 使用私有读或签名 URL，要确保 URL 在预览时仍未过期。
+- 如果 OSS 无法配置 CORS，或者不希望浏览器直接访问 OSS，则新增后端代理预览接口。
+
+推荐后端代理接口：
+
+```http
+GET /v1/agents/demand-analysis/handoff-documents/{doc_id}/markdown
+```
+
+后端代理接口职责：
+
+1. 根据 `doc_id` 查询 `handoff_documents.public_url` 或 `local_markdown_path`。
+2. 优先读取本地 Markdown；如果没有本地文件，再由服务端请求 OSS URL。
+3. 返回 `text/markdown; charset=utf-8`。
+4. 如果文件不存在或 OSS 读取失败，返回明确错误。
+
+在第一版公开 OSS URL 能配置 CORS 的情况下，可以不实现代理接口；但文档和代码应保留这个兜底设计，方便后续切换为私有 OSS 或签名 URL。
 
 ### 8.3 兼容旧响应
 
@@ -785,6 +849,8 @@ DEMAND_HANDOFF_CALLBACK_RESPONSE_LIMIT=1000
 10. Agent 被禁用或未开启主动回调时，回调状态记录为 `skipped`。
 11. 管理接口可以新增、编辑、启停 Agent 配置。
 12. 旧数据中仍然包含 `detail_doc.markdown` 时，前端预览逻辑不受影响。
+13. 新数据只包含 `detail_doc.url` 时，前端会尝试读取在线 Markdown。
+14. 如果实现后端代理接口，`doc_id` 可以正确返回 `text/markdown`。
 
 ### 10.2 API 测试
 
@@ -795,6 +861,7 @@ DEMAND_HANDOFF_CALLBACK_RESPONSE_LIMIT=1000
 3. 每个 `task_package.callback.status` 和数据库记录一致。
 4. 对未知 Agent，任务包和文档仍可生成，但回调状态为失败。
 5. 对已禁用 Agent，任务包和文档仍可生成，但回调状态为跳过。
+6. 如果提供 `GET /handoff-documents/{doc_id}/markdown`，接口能读取本地文件或 OSS URL 并返回 Markdown。
 
 ### 10.3 前端验证
 
@@ -805,6 +872,8 @@ DEMAND_HANDOFF_CALLBACK_RESPONSE_LIMIT=1000
 3. Markdown 拉取失败时给出友好提示。
 4. 下游 Agent 配置页面可以完成新增、编辑、启停和测试连接。
 5. 旧结构和新结构都可以预览。
+6. OSS / CDN 跨域失败时，页面显示错误提示，不出现空弹窗。
+7. 使用后端代理预览接口时，不要求浏览器直接跨域访问 OSS。
 
 ## 11. 分阶段落地建议
 
@@ -898,6 +967,15 @@ POST /v1/agents/demand-analysis/handoffs/{handoff_id}/retry
 
 当前需求字段、追问和对话轮次仍可以保存在 `payload_json` 中。除非出现强查询、统计、审计需求，否则不建议现在拆成多张业务表。
 
+### 12.5 OSS 在线预览风险
+
+阿里云 OSS 在线 Markdown 预览需要额外注意：
+
+1. 如果前端直接 fetch OSS URL，Bucket 必须配置 CORS，允许 demo 页面所在域名执行 `GET`。
+2. 如果 URL 是签名 URL，预览时可能因为过期失败。
+3. 如果文档包含敏感信息，公开 OSS / CDN URL 会扩大访问面。
+4. 如果不希望浏览器直接访问 OSS，应该使用需求 Agent 后端代理接口读取并返回 Markdown。
+
 ## 13. 最终推荐方案
 
 第一版实施建议：
@@ -909,6 +987,7 @@ POST /v1/agents/demand-analysis/handoffs/{handoff_id}/retry
 5. 增加 `HandoffDispatcher`，负责主动 HTTP 回调下游 Agent。
 6. 增加下游 Agent 配置管理接口和可视化页面。
 7. `handoff` 响应改为 URL + 元数据。
-8. Demo 页面通过 `detail_doc.url` 在线预览 Markdown。
+8. Demo 页面通过 `detail_doc.url` 在线预览 Markdown，并兼容旧的 `detail_doc.markdown`。
+9. 如果 OSS CORS 或权限模型不允许前端直连，则补充后端 Markdown 代理预览接口。
 
 这条路径改动集中、兼容当前系统，并且能自然演进到生产级多 Agent 编排。
