@@ -193,6 +193,14 @@ class DemandAnalysisServiceTest(unittest.TestCase):
         self.assertIn("materials", designer_inputs)
         self.assertIn("budget_range", packages["designer_agent"]["constraints"])
 
+        cultural_doc = packages["cultural_ip_agent"]["detail_doc"]
+        cultural_doc_path = Path(cultural_doc["markdown_path"])
+        self.assertTrue(cultural_doc_path.exists())
+        self.assertIn("详细任务描述", cultural_doc["title"])
+        self.assertIn("## 7. 工作拆解", cultural_doc["markdown"])
+        self.assertIn("文化IP设计师Agent", cultural_doc_path.read_text(encoding="utf-8"))
+        self.assertIn("detailed_brief", packages["designer_agent"])
+
     def test_report_is_persisted_to_sqlite_and_output_files(self):
         task = self.service.create_task(
             "为 3 月西湖春游的新婚人群设计一套丝绸伴手礼。",

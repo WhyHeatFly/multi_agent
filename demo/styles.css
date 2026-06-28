@@ -101,6 +101,35 @@ button:disabled {
   box-shadow: 0 24px 80px rgba(30, 40, 37, 0.24);
 }
 
+.document-modal {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(980px, 100%);
+  height: min(860px, calc(100vh - 44px));
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8faf9;
+  box-shadow: 0 24px 80px rgba(30, 40, 37, 0.26);
+}
+
+.document-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+}
+
+.document-toolbar h1 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
 .modal-actions {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -530,7 +559,8 @@ tr:last-child td {
   color: var(--accent-strong);
 }
 
-.report-preview {
+.report-preview,
+.report-document {
   display: grid;
   gap: 8px;
   padding: 16px;
@@ -540,33 +570,170 @@ tr:last-child td {
   line-height: 1.7;
 }
 
-.report-preview h1,
-.report-preview h2 {
+.report-preview {
+  padding: 0;
+  overflow: hidden;
+}
+
+.report-preview-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.report-preview-card h3 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.35;
+  letter-spacing: 0;
+}
+
+.preview-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.preview-metrics div {
+  min-height: 68px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8faf9;
+}
+
+.preview-metrics strong,
+.preview-metrics span {
+  display: block;
+}
+
+.preview-metrics strong {
+  color: var(--accent-strong);
+  font-size: 18px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.preview-metrics span {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.field-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.field-chip-row span {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--success-bg);
+  color: var(--accent-strong);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.report-document {
+  align-content: start;
+  overflow-y: auto;
+  margin: 22px auto;
+  width: min(760px, calc(100% - 44px));
+  padding: 34px 42px;
+  background: #fff;
+}
+
+.report-document h1,
+.report-document h2 {
   margin: 8px 0 2px;
   letter-spacing: 0;
 }
 
-.report-preview h1 {
-  font-size: 24px;
+.report-document h1 {
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 30px;
+  line-height: 1.25;
 }
 
-.report-preview h2 {
-  font-size: 17px;
+.report-document h2 {
+  margin-top: 24px;
+  font-size: 19px;
   color: var(--accent-strong);
 }
 
-.report-preview p,
-.report-preview ul {
+.report-document p,
+.report-document ul {
   margin: 0;
 }
 
-.report-preview ul {
+.report-document p {
+  color: #27322f;
+}
+
+.report-document ul {
   padding-left: 20px;
+}
+
+.report-document li {
+  margin: 4px 0;
 }
 
 .handoff-grid {
   display: grid;
   gap: 12px;
+}
+
+.handoff-title {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.handoff-title small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.handoff-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.handoff-summary div {
+  min-height: 62px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8faf9;
+}
+
+.handoff-summary span,
+.handoff-summary strong {
+  display: block;
+}
+
+.handoff-summary span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.handoff-summary strong {
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .turn-list {
@@ -601,6 +768,8 @@ tr:last-child td {
 }
 
 .handoff-item {
+  display: grid;
+  gap: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
@@ -665,6 +834,33 @@ pre {
   .intake-modal {
     max-height: calc(100vh - 24px);
     padding: 18px;
+  }
+
+  .document-modal {
+    height: calc(100vh - 24px);
+  }
+
+  .document-toolbar {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .report-document {
+    width: calc(100% - 24px);
+    margin: 12px auto;
+    padding: 22px 18px;
+  }
+
+  .preview-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .handoff-title {
+    flex-direction: column;
+  }
+
+  .handoff-summary {
+    grid-template-columns: 1fr;
   }
 
   .modal-actions {

@@ -14,9 +14,11 @@ class DemandStorage:
     def __init__(self, base_dir: str | Path = "outputs") -> None:
         self.base_dir = Path(base_dir)
         self.report_dir = self.base_dir / "demand_reports"
+        self.handoff_dir = self.base_dir / "handoff_docs"
         self.db_path = self.base_dir / "demand_agent.sqlite3"
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.report_dir.mkdir(parents=True, exist_ok=True)
+        self.handoff_dir.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
     def save_task(self, task: DemandTask) -> None:
@@ -95,6 +97,12 @@ class DemandStorage:
         markdown_path = self.report_dir / f"{report_id}.md"
         json_path = self.report_dir / f"{report_id}.json"
         return {"json_path": str(json_path), "markdown_path": str(markdown_path)}
+
+    def save_handoff_doc(self, report_id: str, agent: str, markdown: str) -> dict[str, str]:
+        safe_agent = "".join(char if char.isalnum() or char in {"_", "-"} else "_" for char in agent)
+        markdown_path = self.handoff_dir / f"{report_id}_{safe_agent}.md"
+        markdown_path.write_text(markdown, encoding="utf-8")
+        return {"markdown_path": str(markdown_path)}
 
     def load_task(self, demand_task_id: str) -> DemandTask | None:
         with self._connection() as conn:

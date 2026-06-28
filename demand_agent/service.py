@@ -152,7 +152,18 @@ class DemandAnalysisService:
         if task.report is None:
             self._generate_report(task)
         task.status = TaskStatus.HANDOFF
-        packages = [self._build_handoff_package(task, agent) for agent in target_agents]
+        packages = []
+        for agent in target_agents:
+            package = self._build_handoff_package(task, agent)
+            markdown = self._handoff_markdown(task, package)
+            doc_files = self.storage.save_handoff_doc(task.report.report_id, agent, markdown)
+            package["detail_doc"] = {
+                "title": f"{package['agent_name']}详细任务描述",
+                "format": "markdown",
+                "markdown_path": doc_files["markdown_path"],
+                "markdown": markdown,
+            }
+            packages.append(package)
         task.record("handoff_generated", {"target_agents": target_agents})
         task.touch()
         self._persist(task)
@@ -346,10 +357,20 @@ class DemandAnalysisService:
 
     def _build_handoff_package(self, task: DemandTask, agent: str) -> dict:
         fields = self._field_values(task)
+        report = task.report.structured_json if task.report else {}
         base = {
             "agent": agent,
+            "agent_name": handoff_agent_name(agent),
             "source_report_id": task.report.report_id if task.report else None,
             "source_report_version": task.version,
+            "source_summary": {
+                "project_summary": report.get("project_summary") or self._project_summary(fields),
+                "completeness_score": report.get("completeness_score"),
+                "original_requirement": task.user_input,
+                "confirmed_fields": report.get("confirmed_fields", {}),
+                "assumptions": report.get("assumptions", {}),
+                "pending_questions": report.get("pending_questions", []),
+            },
         }
         if agent == "cultural_ip_agent":
             base.update(
@@ -367,6 +388,20 @@ class DemandAnalysisService:
                         "budget_range": fields.get("budget_range", DEFAULT_BUDGET),
                     },
                     "expected_outputs": ["故事内核", "符号体系", "文化依据", "禁忌风险", "设计转译建议"],
+                    "detailed_brief": {
+                        "objective": "围绕目标人群、使用场景和文化关键词，生成可被产品设计和营销继续使用的文化 IP 方向。",
+                        "work_scope": [
+                            "提炼 2-3 个文化母题，并说明每个母题的情绪价值、使用边界和传播表达。",
+                            "输出故事内核、角色/符号体系、视觉转译建议和禁忌风险。",
+                            "为设计师提供可落地的纹样、色彩、材质触点，而不是停留在抽象文化词。",
+                        ],
+                        "research_dimensions": ["地域文化", "婚庆/礼赠语义", "情绪关键词", "目标人群审美", "文化禁忌"],
+                        "acceptance_criteria": [
+                            "每个 IP 方向都能对应至少一个核心符号和一个产品转译方式。",
+                            "明确标注不建议使用的典故、意象或表达风险。",
+                            "输出内容能被设计师直接用于纹样和包装概念开发。",
+                        ],
+                    },
                 }
             )
         elif agent == "designer_agent":
@@ -384,6 +419,20 @@ class DemandAnalysisService:
                         "channels": fields.get("channel_suggestions", DEFAULT_CHANNELS),
                     },
                     "expected_outputs": ["纹样方案", "配色方案", "包装草图", "产品效果图"],
+                    "detailed_brief": {
+                        "objective": "将需求报告和文化 IP 方向转化为可生产、可展示、适合渠道传播的产品视觉方案。",
+                        "work_scope": [
+                            "拆解产品组合结构，明确主产品、辅助产品和包装层级。",
+                            "输出纹样系统、主辅色、材质工艺建议、包装信息层级和陈列方式。",
+                            "结合预算、渠道和场景，给出可量产的设计约束与备选方案。",
+                        ],
+                        "research_dimensions": ["产品品类", "材质与工艺", "预算区间", "渠道陈列", "拍照传播", "礼赠开箱体验"],
+                        "acceptance_criteria": [
+                            "至少给出 2 套差异化视觉方向，并说明适用场景。",
+                            "每套方向都包含纹样、配色、包装和工艺建议。",
+                            "明确哪些设计不建议采用，以及原因。",
+                        ],
+                    },
                 }
             )
         elif agent == "marketer_agent":
@@ -398,6 +447,20 @@ class DemandAnalysisService:
                     },
                     "constraints": {"tone": fields.get("aesthetic_preferences", [])},
                     "expected_outputs": ["社媒文案", "详情页卖点", "短视频脚本方向"],
+                    "detailed_brief": {
+                        "objective": "把需求报告转化为面向目标渠道的传播卖点、内容脚本和转化文案。",
+                        "work_scope": [
+                            "提炼一句话卖点、核心购买理由和不同渠道的话术重点。",
+                            "输出小红书/短视频/线下陈列可使用的内容结构。",
+                            "区分情绪价值、文化价值、实用价值和礼赠价值，避免空泛表达。",
+                        ],
+                        "research_dimensions": ["目标人群动机", "渠道语境", "内容钩子", "礼赠决策", "视觉传播点", "风险表达"],
+                        "acceptance_criteria": [
+                            "至少输出 3 个标题方向、3 条核心卖点和 1 个短视频脚本框架。",
+                            "文案必须能对应报告中的字段或假设，不编造未确认事实。",
+                            "明确哪些表述需要谨慎或避免。",
+                        ],
+                    },
                 }
             )
         else:
@@ -407,9 +470,99 @@ class DemandAnalysisService:
                     "inputs": fields,
                     "constraints": {},
                     "expected_outputs": [],
+                    "detailed_brief": {
+                        "objective": "基于需求分析报告完成下游专项任务。",
+                        "work_scope": ["阅读需求报告", "确认输入字段", "输出符合本 Agent 职责的结果"],
+                        "research_dimensions": ["目标人群", "使用场景", "预算约束", "渠道要求", "风险假设"],
+                        "acceptance_criteria": ["输出需引用关键需求字段", "标注不确定信息", "给出可执行下一步"],
+                    },
                 }
             )
         return base
+
+    def _handoff_markdown(self, task: DemandTask, package: dict) -> str:
+        report = task.report.structured_json if task.report else {}
+        fields = report.get("fields", {})
+        brief = package.get("detailed_brief", {})
+        lines = [
+            f"# {package.get('agent_name', package['agent'])}详细任务描述",
+            "",
+            "## 1. 任务定位",
+            f"- 目标 Agent：{package['agent']}",
+            f"- 任务名称：{package.get('task', '通用需求交接')}",
+            f"- 来源报告：{package.get('source_report_id')}",
+            f"- 项目摘要：{report.get('project_summary', self._project_summary(self._field_values(task)))}",
+            f"- 完整度评分：{report.get('completeness_score', '待计算')}",
+            "",
+            "## 2. 核心目标",
+            brief.get("objective", "基于需求分析报告完成下游专项任务。"),
+            "",
+            "## 3. 原始需求与上下文",
+            f"- 原始需求：{task.user_input}",
+            f"- 品牌上下文：{task.context.get('brand', '未提供')}",
+            f"- 目标渠道：{format_value(task.context.get('target_channel', report.get('constraints', {}).get('channels', [])))}",
+            "",
+            "## 4. 已确认需求字段",
+        ]
+        confirmed = report.get("confirmed_fields", {})
+        if confirmed:
+            for name, value in confirmed.items():
+                lines.append(f"- {name}: {format_value(value)}")
+        else:
+            lines.append("- 暂无。")
+        lines.extend(["", "## 5. 输入参数"])
+        for name, value in package.get("inputs", {}).items():
+            lines.append(f"- {name}: {format_value(value)}")
+        lines.extend(["", "## 6. 约束条件"])
+        constraints = package.get("constraints", {})
+        if constraints:
+            for name, value in constraints.items():
+                lines.append(f"- {name}: {format_value(value)}")
+        else:
+            lines.append("- 暂无。")
+        lines.extend(["", "## 7. 工作拆解"])
+        for index, item in enumerate(brief.get("work_scope", []), start=1):
+            lines.append(f"{index}. {item}")
+        lines.extend(["", "## 8. 研究与判断维度"])
+        for item in brief.get("research_dimensions", []):
+            lines.append(f"- {item}")
+        lines.extend(["", "## 9. 输出物要求"])
+        for item in package.get("expected_outputs", []):
+            lines.append(f"- {item}")
+        if not package.get("expected_outputs"):
+            lines.append("- 按任务职责输出结构化结果。")
+        lines.extend(["", "## 10. 验收标准"])
+        for item in brief.get("acceptance_criteria", []):
+            lines.append(f"- {item}")
+        lines.extend(["", "## 11. 风险、假设与待确认"])
+        assumptions = report.get("assumptions", {})
+        if assumptions:
+            lines.append("### 系统假设")
+            for name, value in assumptions.items():
+                lines.append(f"- {name}: {format_value(value)}")
+        risk_notes = report.get("risk_notes", [])
+        if risk_notes:
+            lines.append("### 风险提示")
+            for note in risk_notes:
+                lines.append(f"- {note}")
+        pending_questions = report.get("pending_questions", [])
+        if pending_questions:
+            lines.append("### 待确认问题")
+            for question in pending_questions:
+                lines.append(f"- {question.get('question', question)}")
+        if not assumptions and not risk_notes and not pending_questions:
+            lines.append("- 暂无额外风险、假设或待确认问题。")
+        lines.extend(["", "## 12. 字段来源与置信度"])
+        if fields:
+            for name, payload in fields.items():
+                if isinstance(payload, dict):
+                    lines.append(
+                        f"- {name}: {format_value(payload.get('field_value'))}；"
+                        f"来源 {payload.get('source', 'unknown')}；置信度 {payload.get('confidence', '--')}"
+                    )
+        else:
+            lines.append("- 暂无字段详情。")
+        return "\n".join(lines)
 
     def _followup_analysis_input(self, message: str, answers: dict[str, Any]) -> str:
         parts = []
@@ -579,6 +732,25 @@ def first(value, default=None):
 
 def stable_json(value) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def handoff_agent_name(agent: str) -> str:
+    names = {
+        "cultural_ip_agent": "文化IP设计师Agent",
+        "designer_agent": "产品视觉设计师Agent",
+        "marketer_agent": "营销内容Agent",
+    }
+    return names.get(agent, agent)
+
+
+def format_value(value: Any) -> str:
+    if isinstance(value, list):
+        return "、".join(format_value(item) for item in value) if value else "无"
+    if isinstance(value, dict):
+        return "；".join(f"{key}: {format_value(item)}" for key, item in value.items()) if value else "无"
+    if value is None or value == "":
+        return "未提供"
+    return str(value)
 
 
 def scenario_goal(scenario: str) -> str:

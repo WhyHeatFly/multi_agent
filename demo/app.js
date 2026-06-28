@@ -16,8 +16,11 @@ const elements = {
   submitAnswersButton: document.querySelector("#submitAnswersButton"),
   submitQuestionsButton: document.querySelector("#submitQuestionsButton"),
   handoffButton: document.querySelector("#handoffButton"),
+  openReportButton: document.querySelector("#openReportButton"),
+  closeReportButton: document.querySelector("#closeReportButton"),
   intakeModal: document.querySelector("#intakeModal"),
   questionsModal: document.querySelector("#questionsModal"),
+  reportModal: document.querySelector("#reportModal"),
   intakeError: document.querySelector("#intakeError"),
   questionsError: document.querySelector("#questionsError"),
   userInput: document.querySelector("#userInput"),
@@ -35,6 +38,8 @@ const elements = {
   modalQuestionsPanel: document.querySelector("#modalQuestionsPanel"),
   questionCount: document.querySelector("#questionCount"),
   reportPreview: document.querySelector("#reportPreview"),
+  reportDocument: document.querySelector("#reportDocument"),
+  reportModalTitle: document.querySelector("#reportModalTitle"),
   turnsPanel: document.querySelector("#turnsPanel"),
   handoffPanel: document.querySelector("#handoffPanel"),
 };
@@ -64,6 +69,14 @@ elements.submitAnswersButton.addEventListener("click", async () => {
 
 elements.handoffButton.addEventListener("click", async () => {
   await generateHandoff();
+});
+
+elements.openReportButton.addEventListener("click", () => {
+  openReportModal();
+});
+
+elements.closeReportButton.addEventListener("click", () => {
+  closeReportModal();
 });
 
 elements.followupInput.addEventListener("input", () => {
@@ -225,6 +238,7 @@ async function generateHandoff() {
         target_agents: ["cultural_ip_agent", "designer_agent", "marketer_agent"],
       }),
     });
+    state.handoff = data.task_packages || [];
     renderHandoff(data.task_packages || []);
     showNotice("下游任务包已生成。", "success");
   } catch (error) {
@@ -254,7 +268,11 @@ function renderReport(data) {
   renderFields(report.fields || {});
   renderTurns(report.conversation_turns || []);
   elements.reportPreview.classList.remove("empty");
-  elements.reportPreview.innerHTML = markdownToHtml(data.report_markdown || "暂无报告。");
+  elements.reportPreview.innerHTML = reportPreviewHtml(data);
+  elements.reportDocument.classList.remove("empty");
+  elements.reportDocument.innerHTML = markdownToHtml(data.report_markdown || "暂无报告。");
+  elements.reportModalTitle.textContent = report.project_summary || data.report_id || "需求分析报告";
+  elements.openReportButton.disabled = !data.report_markdown;
 
   const llmStatus = report.llm_status;
   if (report.llm_repair_status === "success") {
@@ -381,15 +399,35 @@ function renderHandoff(packages) {
   elements.handoffPanel.className = "handoff-grid";
   elements.handoffPanel.innerHTML = packages
     .map(
-      (item) => `
+      (item, index) => `
         <section class="handoff-item">
-          <h3>${escapeHtml(item.agent || "agent")}</h3>
-          <pre>${escapeHtml(JSON.stringify(item, null, 2))}</pre>
+          <div class="handoff-title">
+            <div>
+              <h3>${escapeHtml(item.agent_name || item.agent || "agent")}</h3>
+              <small>${escapeHtml(item.task || "通用需求交接")}</small>
+            </div>
+            <button class="secondary-button compact-button" type="button" data-doc-index="${index}">预览详细文档</button>
+          </div>
+          <div class="handoff-summary">
+            <div><span>来源报告</span><strong>${escapeHtml(item.source_report_id || "--")}</strong></div>
+            <div><span>输出物</span><strong>${escapeHtml((item.expected_outputs || []).join("、") || "--")}</strong></div>
+            <div><span>文档地址</span><strong>${escapeHtml(item.detail_doc?.markdown_path || "--")}</strong></div>
+          </div>
+          <pre>${escapeHtml(JSON.stringify(withoutMarkdownPayload(item), null, 2))}</pre>
         </section>
       `,
     )
     .join("");
 }
+
+elements.handoffPanel.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-doc-index]");
+  if (!button) return;
+  const index = Number(button.dataset.docIndex);
+  const packageItem = (state.handoff || [])[index];
+  if (!packageItem?.detail_doc?.markdown) return;
+  openMarkdownDocument(packageItem.detail_doc.title || `${packageItem.agent}详细任务描述`, packageItem.detail_doc.markdown);
+});
 
 function markdownToHtml(markdown) {
   const lines = markdown.split("\n");
@@ -427,10 +465,40 @@ function markdownToHtml(markdown) {
   return html.join("");
 }
 
+function reportPreviewHtml(data) {
+  const report = data.report_json || {};
+  const fields = report.fields || {};
+  const summaryItems = [
+    ["完整度", `${data.completeness_score ?? report.completeness_score ?? "--"}`],
+    ["建议动作", report.recommended_action || "--"],
+    ["待确认", `${(report.pending_questions || []).length} 项`],
+  ];
+  const fieldBadges = ["target_users", "usage_scenarios", "product_categories", "budget_range"]
+    .map((name) => fields[name])
+    .filter(Boolean)
+    .map((field) => `<span>${escapeHtml(displayFieldValue(field.field_value))}</span>`)
+    .join("");
+  return `
+    <div class="report-preview-card">
+      <div>
+        <p class="eyebrow">Report Snapshot</p>
+        <h3>${escapeHtml(report.project_summary || "需求分析报告")}</h3>
+      </div>
+      <div class="preview-metrics">
+        ${summaryItems
+          .map(([label, value]) => `<div><strong>${escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></div>`)
+          .join("")}
+      </div>
+      <div class="field-chip-row">${fieldBadges || "<span>暂无核心字段</span>"}</div>
+    </div>
+  `;
+}
+
 function setLoading(isLoading, message = "") {
   elements.analyzeButton.disabled = isLoading;
   elements.submitAnswersButton.disabled = isLoading || !state.taskId;
   elements.handoffButton.disabled = isLoading || !state.taskId;
+  elements.openReportButton.disabled = isLoading || !state.report;
   elements.submitQuestionsButton.disabled = isLoading;
   elements.cancelIntakeButton.disabled = isLoading;
   elements.editIntakeButton.disabled = isLoading || !state.intakeSubmitted;
@@ -442,6 +510,7 @@ function setLoading(isLoading, message = "") {
 function openIntakeModal() {
   elements.intakeModal.classList.remove("hidden");
   elements.questionsModal.classList.add("hidden");
+  elements.reportModal.classList.add("hidden");
   state.activeModal = "intake";
   document.body.classList.add("modal-open");
   elements.cancelIntakeButton.classList.toggle("hidden", !state.intakeSubmitted);
@@ -461,6 +530,7 @@ function closeIntakeModal() {
 function openQuestionsModal() {
   elements.questionsModal.classList.remove("hidden");
   elements.intakeModal.classList.add("hidden");
+  elements.reportModal.classList.add("hidden");
   state.activeModal = "questions";
   document.body.classList.add("modal-open");
   elements.questionsError.classList.add("hidden");
@@ -471,6 +541,34 @@ function openQuestionsModal() {
 function closeQuestionsModal() {
   elements.questionsModal.classList.add("hidden");
   if (state.activeModal === "questions") {
+    state.activeModal = null;
+  }
+  if (!state.activeModal) {
+    document.body.classList.remove("modal-open");
+  }
+}
+
+function openReportModal() {
+  if (!state.report) return;
+  openMarkdownDocument(
+    elements.reportModalTitle.textContent || "需求分析报告",
+    state.report.report_markdown || "暂无报告。",
+  );
+}
+
+function openMarkdownDocument(title, markdown) {
+  elements.reportModalTitle.textContent = title;
+  elements.reportDocument.classList.remove("empty");
+  elements.reportDocument.innerHTML = markdownToHtml(markdown || "暂无内容。");
+  elements.reportModal.classList.remove("hidden");
+  state.activeModal = "report";
+  document.body.classList.add("modal-open");
+  elements.closeReportButton.focus();
+}
+
+function closeReportModal() {
+  elements.reportModal.classList.add("hidden");
+  if (state.activeModal === "report") {
     state.activeModal = null;
   }
   if (!state.activeModal) {
@@ -504,6 +602,18 @@ function splitList(value) {
     .split(/[、,\s，]+/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function displayFieldValue(value) {
+  return Array.isArray(value) ? value.join("、") : String(value ?? "");
+}
+
+function withoutMarkdownPayload(item) {
+  const copy = { ...item };
+  if (copy.detail_doc) {
+    copy.detail_doc = { ...copy.detail_doc, markdown: "[see detail_doc.markdown_path]" };
+  }
+  return copy;
 }
 
 function badge(value, className = "") {

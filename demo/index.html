@@ -53,6 +53,19 @@
       </section>
     </div>
 
+    <div id="reportModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="reportModalTitle">
+      <section class="document-modal">
+        <header class="document-toolbar">
+          <div>
+            <p class="eyebrow">Demand Report</p>
+            <h1 id="reportModalTitle">需求分析报告</h1>
+          </div>
+          <button id="closeReportButton" class="secondary-button compact-button" type="button">关闭</button>
+        </header>
+        <article id="reportDocument" class="report-document empty">暂无报告。</article>
+      </section>
+    </div>
+
     <main class="shell">
       <section class="workspace">
         <aside class="input-panel" aria-label="需求输入">
@@ -159,6 +172,7 @@
           <section class="section-block">
             <div class="section-heading">
               <h2>报告预览</h2>
+              <button id="openReportButton" class="secondary-button compact-button" type="button" disabled>打开完整报告</button>
             </div>
             <article id="reportPreview" class="report-preview empty">暂无报告。</article>
           </section>
