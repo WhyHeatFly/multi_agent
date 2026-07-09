@@ -1,0 +1,52 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>知识库管理 - 文化 IP 设计师 Agent</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20260622-46-delete" />
+  </head>
+  <body>
+    <main class="detail-shell">
+      <header class="detail-header">
+        <a class="back-link" href="/">返回首页</a>
+        <div>
+          <p class="eyebrow">管理</p>
+          <h1>文化知识库</h1>
+          <p>查看、搜索、重建和删除本地知识库条目。</p>
+        </div>
+        <div class="current-status">
+          <span>Admin</span>
+          <strong id="knowledgeStatus">未加载</strong>
+        </div>
+      </header>
+
+      <section class="panel knowledge-toolbar">        <label>搜索关键词<input id="knowledgeQuery" placeholder="如：西湖、婚嫁、风险" /></label>
+        <div class="button-row inline-buttons">
+          <button class="primary-button" type="button" id="searchKnowledge">搜索</button>
+          <button class="secondary-button" type="button" id="refreshKnowledge">刷新</button>
+          <button class="secondary-button" type="button" id="ingestKnowledge">重建入库</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <div>
+            <h2>知识块</h2>
+            <p id="knowledgeCount">0 条</p>
+          </div>
+        </div>
+        <div id="knowledgeList" class="knowledge-list empty-state">暂无知识块。</div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/static/knowledge.js?v=20260622-46-delete"></script>
+  </body>
+</html>
+
+
+
+
+
+

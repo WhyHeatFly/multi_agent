@@ -1,0 +1,86 @@
+﻿services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cultural_ip}
+      POSTGRES_USER: ${POSTGRES_USER:-cultural_ip}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cultural_ip_password}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cultural_ip} -d ${POSTGRES_DB:-cultural_ip}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  migrate:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://cultural_ip:cultural_ip_password@postgres:5432/cultural_ip}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-change-me}
+    command: alembic upgrade head
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://cultural_ip:cultural_ip_password@postgres:5432/cultural_ip}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-change-me}
+      APP_ENV: ${APP_ENV:-development}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4.1-mini}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "${API_PORT:-18080}:8000"
+    volumes:
+      - .:/app
+      - reports:/app/reports
+      - uploads:/app/uploads
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://cultural_ip:cultural_ip_password@postgres:5432/cultural_ip}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-change-me}
+    command: python -m app.workers.runner
+    volumes:
+      - .:/app
+      - reports:/app/reports
+      - uploads:/app/uploads
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  postgres_data:
+  reports:
+  uploads:
+
+
+
+
+
+

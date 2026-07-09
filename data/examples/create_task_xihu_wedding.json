@@ -1,0 +1,17 @@
+{
+  "demand_report_id": "dr_001",
+  "structured_report": {
+    "target_users": ["新婚夫妇", "婚礼宾客"],
+    "usage_scenarios": ["婚礼回礼", "西湖春游纪念"],
+    "product_categories": ["丝巾", "香囊", "礼盒"],
+    "cultural_preferences": ["西湖", "婚嫁", "丝绸", "江南"],
+    "emotional_keywords": ["浪漫", "吉祥", "温柔", "春日"],
+    "risk_hints": ["避免悲情爱情典故", "避免孤独意象"]
+  },
+  "options": {
+    "num_directions": 5,
+    "risk_check": true,
+    "need_visual_translation": true
+  }
+}
+

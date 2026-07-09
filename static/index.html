@@ -1,0 +1,83 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>文化 IP 设计师 Agent</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20260623-no-home-ingest" />
+  </head>
+  <body>
+    <main class="home-shell split-home single-form-home">
+      <header class="home-header compact-header">
+        <div class="brand compact-brand">
+          <div class="brand-mark" aria-hidden="true">IP</div>
+          <h1>文化 IP 设计师 Agent</h1>
+        </div>
+        <a class="secondary-link" href="/knowledge">知识库管理</a>
+      </header>
+
+      <section class="balanced-grid single-form-grid ratio-46-grid">
+        <section class="panel create-window split-panel" id="createWindow">
+          <div class="compact-panel-head">
+            <h2>新建任务</h2>
+            <button class="secondary-button compact" type="button" id="fillExample">填入示例</button>
+          </div>
+
+          <form id="demandForm" class="task-form split-form mixed-form">
+            <div class="split-form-fields mixed-form-fields">
+              <div class="field-row two-field-row">
+                <label>人群<input id="targetUsers" value="新婚夫妇, 婚礼宾客" /></label>
+                <label>场景<input id="usageScenarios" value="婚礼回礼, 西湖春游纪念" /></label>
+              </div>
+              <div class="field-row two-field-row">
+                <label>产品品类<input id="productCategories" value="丝巾, 香囊, 礼盒" /></label>
+                <label>情绪关键词<input id="emotionalKeywords" value="浪漫, 吉祥, 温柔, 春日" /></label>
+              </div>
+              <label>文化偏好<textarea id="culturalPreferences" rows="4">西湖, 婚嫁, 丝绸, 江南</textarea></label>
+              <label>风险提示<textarea id="riskHints" rows="4">避免悲情爱情典故, 避免孤独意象</textarea></label>
+            </div>
+            <div class="split-form-actions single-form-actions">
+              <label class="direction-count">方向数量<input id="numDirections" type="number" min="1" max="5" value="3" /></label>
+              <div class="button-row compact-actions">
+                <button class="primary-button" type="submit" id="createTaskButton">生成任务</button>
+              </div>
+            </div>
+          </form>
+
+          <div id="formError" class="form-error" role="alert"></div>
+          <div id="loadingOverlay" class="loading-overlay" aria-live="polite" aria-hidden="true">
+            <div class="spinner" aria-hidden="true"></div>
+            <strong>正在生成文化 IP 方案</strong>
+            <p id="loadingStep">解析需求报告</p>
+          </div>
+        </section>
+
+        <section class="panel history-window split-panel split-history scroll-history">
+          <div class="history-table-head split-history-head">
+            <div>
+              <h2>历史任务</h2>
+              <p id="taskCount">0 个任务</p>
+            </div>
+            <input id="taskSearch" placeholder="搜索任务、场景、文化关键词" />
+            <button class="icon-button" type="button" id="refreshTasks" title="刷新任务">
+              <span aria-hidden="true">↻</span>
+            </button>
+          </div>
+          <div class="history-table split-history-table" aria-label="历史任务列表">
+            <div class="history-row history-row-head" aria-hidden="true">
+              <span>任务</span>
+              <span>状态</span>
+              <span>场景</span>
+              <span>更新时间</span>
+            </div>
+            <div id="taskList" class="task-list history-table-body empty-state">暂无历史任务。</div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/static/app.js?v=20260623-no-home-ingest"></script>
+  </body>
+</html>
+

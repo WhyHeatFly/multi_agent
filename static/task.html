@@ -1,0 +1,112 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>任务详情 - 文化 IP 设计师 Agent</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20260623-feedback-status" />
+  </head>
+  <body>
+    <main class="detail-shell task-detail-shell">
+      <div class="detail-topbar">
+        <a class="back-link" href="/">返回首页</a>
+        <div class="detail-actions task-header-actions">
+          <div class="status-badge">
+            <span>状态</span>
+            <strong id="taskStatus">Loading</strong>
+          </div>
+          <button class="secondary-button compact danger" type="button" id="deleteTask" disabled>删除任务</button>
+        </div>
+      </div>
+
+      <header class="detail-header task-detail-header">
+        <div class="detail-title-copy">
+          <p class="eyebrow">任务详情</p>
+          <h1 id="taskTitle">正在加载任务</h1>
+          <p id="taskSubtitle">请稍候。</p>
+        </div>
+      </header>
+
+      <section id="taskError" class="panel page-error" role="alert"></section>
+
+      <section class="panel detail-summary">
+        <dl class="detail-grid">
+          <div><dt>人群</dt><dd id="detailUsers">-</dd></div>
+          <div><dt>场景</dt><dd id="detailScenarios">-</dd></div>
+          <div><dt>品类</dt><dd id="detailCategories">-</dd></div>
+          <div><dt>文化偏好</dt><dd id="detailCulture">-</dd></div>
+        </dl>
+      </section>
+
+      <section class="panel results-panel">
+        <nav class="tabs" aria-label="结果视图">
+          <button class="tab active" data-tab="directions">方向</button>
+          <button class="tab" data-tab="report">报告</button>
+          <button class="tab" data-tab="handoff">任务包</button>
+        </nav>
+
+        <div id="directionsView" class="tab-view active">
+          <div class="section-head compact-section-head">
+            <div>
+              <h2>IP 方向</h2>
+              <p id="directionCount">0 个方向</p>
+            </div>
+          </div>
+          <div id="directionsList" class="direction-list empty-state">正在加载方向。</div>
+        </div>
+
+        <div id="reportView" class="tab-view">
+          <div class="section-head compact-section-head">
+            <div>
+              <h2>报告</h2>
+            </div>
+            <div class="report-actions">
+              <button class="secondary-button compact" type="button" id="downloadReport" disabled>下载报告</button>
+            </div>
+          </div>
+          <article id="reportContent" class="report empty-state">请选择一个方向生成报告。</article>
+        </div>
+
+        <div id="handoffView" class="tab-view">
+          <div class="section-head compact-section-head">
+            <div>
+              <h2>任务包</h2>
+              <p>生成给设计师、营销师、品控师等下游 Agent 使用的任务包。</p>
+            </div>
+            <div class="handoff-actions">
+              <button class="secondary-button compact" type="button" id="downloadHandoff" disabled>下载任务包</button>
+              <button class="secondary-button compact" type="button" id="createHandoff" disabled>生成任务包</button>
+            </div>
+          </div>
+          <div id="handoffList" class="package-list empty-state">请先生成报告，再生成任务包。</div>
+        </div>
+      </section>
+    </main>
+
+    <aside class="floating-agent-panel collapsed" id="agentPanel" aria-label="Agent 调整面板">
+      <button class="agent-panel-toggle" type="button" id="agentPanelToggle" aria-expanded="false">方向反馈</button>
+      <div class="agent-panel-body">
+        <div class="agent-panel-head">
+          <h2 id="agentPanelTitle">方向反馈</h2>
+          <button class="icon-button" type="button" id="collapseAgentPanel" title="收起调整框"><span aria-hidden="true">×</span></button>
+        </div>
+        <section class="agent-panel-view active" id="directionAdjustView">
+          <label>选中方向<select id="selectedDirection"></select></label>
+          <label>反馈<textarea id="feedbackText" rows="5" placeholder="输入方向调整意见"></textarea></label>
+          <p class="feedback-status" id="directionFeedbackStatus" role="status"></p>
+          <button class="primary-button" type="button" id="submitFeedback" disabled>更新方向</button>
+        </section>
+        <section class="agent-panel-view" id="reportAdjustView">
+          <label>反馈<textarea id="reportFeedbackText" rows="5" placeholder="输入报告修改意见"></textarea></label>
+          <p class="feedback-status" id="reportFeedbackStatus" role="status"></p>
+          <button class="primary-button" type="button" id="submitReportFeedback" disabled>更新报告</button>
+        </section>
+      </div>
+    </aside>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/static/task.js?v=20260623-feedback-status"></script>
+  </body>
+</html>
+
+
